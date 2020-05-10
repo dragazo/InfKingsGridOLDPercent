@@ -106,35 +106,40 @@ impl KGrid {
         v.sort();
         v
     }
-    fn calc_old_min(&mut self) -> Option<usize> {
-        let mut codes: BTreeSet<Vec<(isize, isize)>> = BTreeSet::new();
+    fn is_old(&self, codes: &mut BTreeSet<Vec<(isize, isize)>>) -> bool {
+        codes.clear();
+        for r in -1..=self.rows as isize {
+            for c in -1..=self.cols as isize {
+                let code = self.get_locating_code(r, c);
+                if code.is_empty() || !codes.insert(code) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    fn calc_old_min(&mut self) -> Option<(usize, Vec<bool>)> {
         let n = self.rows * self.cols;
         assert_ne!(n, 0);
 
-        for size in 1..(n as f64 * CURRENT_BEST).ceil() as usize {
+        let mut codes: BTreeSet<Vec<(isize, isize)>> = Default::default();
+        let mut best: Option<(usize, Vec<bool>)> = None;
+
+        for size in (1..(n as f64 * CURRENT_BEST).ceil() as usize).rev() {
+            let mut works = false;
             for combo in (0..n).combinations(size) {
-                for x in &mut self.old_set {
-                    *x = false;
+                for x in &mut self.old_set { *x = false; }
+                for x in combo { self.old_set[x] = true; }
+                if self.is_old(&mut codes) {
+                    best = Some((size, self.old_set.clone()));
+                    works = true;
+                    break;
                 }
-                for x in combo {
-                    self.old_set[x] = true;
-                }
-                codes.clear();
-                let mut valid = true;
-                for r in -1..=self.rows as isize {
-                    for c in -1..=self.cols as isize {
-                        let code = self.get_locating_code(r, c);
-                        if code.is_empty() || !codes.insert(code) {
-                            valid = false;
-                            break;
-                        }
-                    }
-                    if !valid { break; }
-                }
-                if valid { return Some(size); }
             }
+            if !works { break; }
         }
-        None
+        
+        best
     }
 }
 
@@ -176,9 +181,10 @@ fn main() {
 
     match grid.calc_old_min()
     {
-        Some(min) => {
+        Some((min, config)) => {
             let n = rows * cols;
             let d = gcd(min, n);
+            grid.old_set = config; // assign config back into the grid so we can print it
             println!("{}/{} ({})\n{}\n{:?}", min / d, n / d, (min as f64 / n as f64), grid, grid);
         },
         None => {
