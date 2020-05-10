@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use itertools::Itertools;
 
+const CURRENT_BEST: f64 = 0.25;
+
 struct Adjacent {
     row: isize,
     col: isize,
@@ -104,12 +106,12 @@ impl KGrid {
         v.sort();
         v
     }
-    fn calc_old_min(&mut self) -> usize {
+    fn calc_old_min(&mut self) -> Option<usize> {
         let mut codes: BTreeSet<Vec<(isize, isize)>> = BTreeSet::new();
         let n = self.rows * self.cols;
         assert_ne!(n, 0);
 
-        for size in 1..=n {
+        for size in 1..(n as f64 * CURRENT_BEST).ceil() as usize {
             for combo in (0..n).combinations(size) {
                 for x in &mut self.old_set {
                     *x = false;
@@ -129,10 +131,10 @@ impl KGrid {
                     }
                     if !valid { break; }
                 }
-                if valid { return size; }
+                if valid { return Some(size); }
             }
         }
-        unreachable!();
+        None
     }
 }
 
@@ -172,8 +174,15 @@ fn main() {
     let mut grid = KGrid::new();
     grid.set_size(rows, cols);
 
-    let min = grid.calc_old_min();
-    let n = rows * cols;
-    let d = gcd(min, n);
-    println!("{}/{} ({})\n{}\n{:?}", min / d, n / d, (min as f64 / n as f64), grid, grid);
+    match grid.calc_old_min()
+    {
+        Some(min) => {
+            let n = rows * cols;
+            let d = gcd(min, n);
+            println!("{}/{} ({})\n{}\n{:?}", min / d, n / d, (min as f64 / n as f64), grid, grid);
+        },
+        None => {
+            println!("not better than {}", CURRENT_BEST);
+        }
+    };
 }
