@@ -46,6 +46,7 @@ struct KGrid {
     rows: usize,
     cols: usize,
     old_set: Vec<bool>,
+    phase: (isize, isize),
 }
 impl fmt::Display for KGrid {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -55,6 +56,7 @@ impl fmt::Display for KGrid {
             }
             writeln!(f)?;
         }
+        writeln!(f, "phase: {:?}", self.phase)?;
         Ok(())
     }
 }
@@ -77,6 +79,7 @@ impl fmt::Debug for KGrid {
             }
             writeln!(f)?;
         }
+        writeln!(f, "phase: {:?}", self.phase)?;
         Ok(())
     }
 }
@@ -88,20 +91,15 @@ impl KGrid {
         KGrid {
             rows, cols,
             old_set: vec![false; rows * cols],
+            phase: (0, 0),
         }
     }
-    fn set_size(&mut self, rows: usize, cols: usize) {
-        assert_ne!(rows, 0);
-        assert_ne!(cols, 0);
-
-        self.rows = rows;
-        self.cols = cols;
-        self.old_set.clear();
-        self.old_set.extend(std::iter::once(false).cycle().take(rows * cols));
-    }
     fn id_to_inside(&self, row: isize, col: isize) -> usize {
-        let r = (row + self.rows as isize) as usize % self.rows;
-        let c = (col + self.cols as isize) as usize % self.cols;
+        let col_fix = if row < 0 { col - self.phase.0 } else if row >= self.rows as isize { col + self.phase.0 } else { col };
+        let row_fix = if col < 0 { row - self.phase.1 } else if col >= self.cols as isize { row + self.phase.1 } else { row };
+
+        let r = (row_fix + 2 * self.rows as isize) as usize % self.rows;
+        let c = (col_fix + 2 * self.cols as isize) as usize % self.cols;
         r * self.cols + c
     }
     fn get_locating_code(&self, row: isize, col: isize) -> Vec<(isize, isize)> {
@@ -127,19 +125,27 @@ impl KGrid {
         let n = self.rows * self.cols;
         assert_ne!(n, 0);
 
-        let mut codes: BTreeSet<Vec<(isize, isize)>> = Default::default();
-        let mut best: Option<usize> = None;
+        let mut codes = Default::default();
+        let mut best = None;
+
+        let max_phase_x: isize = (self.cols as isize + 1) / 2;
+        let max_phase_y: isize = (self.rows as isize + 1) / 2;
+        let phases: Vec<_> = std::iter::once((0, 0)).chain((1..=max_phase_x).map(|x| (x, 0))).chain((1..=max_phase_y).map(|x| (0, x))).collect();
 
         for size in (1..(n as f64 * CURRENT_BEST).ceil() as usize).rev() {
             let mut works = false;
             for combo in (0..n).combinations(size) {
                 for x in &mut self.old_set { *x = false; }
                 for x in combo { self.old_set[x] = true; }
-                if self.is_old(&mut codes) {
-                    best = Some(size);
-                    works = true;
-                    f(size, self);
-                    break;
+
+                for &phase in &phases {
+                    self.phase = phase;
+                    if self.is_old(&mut codes) {
+                        best = Some(size);
+                        works = true;
+                        f(size, self);
+                        break;
+                    }
                 }
             }
             if !works { break; }
@@ -164,6 +170,53 @@ fn main() {
     if v.len() < 2 {
         eprintln!("usage: {} [mode] (args...)", v[0]);
         std::process::exit(1);
+    }
+
+    {
+        let mut g = KGrid::new(4, 4);
+
+        assert_eq!(g.id_to_inside(0, 0), 0);
+        assert_eq!(g.id_to_inside(1, 0), 4);
+        assert_eq!(g.id_to_inside(0, 1), 1);
+        assert_eq!(g.id_to_inside(2, 1), 9);
+
+        assert_eq!(g.id_to_inside(-1, 0), 12);
+        assert_eq!(g.id_to_inside(-1, 2), 14);
+        assert_eq!(g.id_to_inside(-1, 4), 12);
+        assert_eq!(g.id_to_inside(4, 4), 0);
+        assert_eq!(g.id_to_inside(4, 1), 1);
+        assert_eq!(g.id_to_inside(4, -1), 3);
+        assert_eq!(g.id_to_inside(-1, -1), 15);
+
+        g.phase = (1, 0);
+
+        assert_eq!(g.id_to_inside(0, 0), 0);
+        assert_eq!(g.id_to_inside(1, 0), 4);
+        assert_eq!(g.id_to_inside(0, 1), 1);
+        assert_eq!(g.id_to_inside(2, 1), 9);
+
+        assert_eq!(g.id_to_inside(-1, 0), 15);
+        assert_eq!(g.id_to_inside(-1, 2), 13);
+        assert_eq!(g.id_to_inside(-1, 4), 15);
+        assert_eq!(g.id_to_inside(4, 4), 1);
+        assert_eq!(g.id_to_inside(4, 1), 2);
+        assert_eq!(g.id_to_inside(4, -1), 0);
+        assert_eq!(g.id_to_inside(-1, -1), 14);
+
+        g.phase = (0, 1);
+
+        assert_eq!(g.id_to_inside(0, 0), 0);
+        assert_eq!(g.id_to_inside(1, 0), 4);
+        assert_eq!(g.id_to_inside(0, 1), 1);
+        assert_eq!(g.id_to_inside(2, 1), 9);
+
+        assert_eq!(g.id_to_inside(-1, 0), 12);
+        assert_eq!(g.id_to_inside(-1, 2), 14);
+        assert_eq!(g.id_to_inside(-1, 4), 0);
+        assert_eq!(g.id_to_inside(4, 4), 4);
+        assert_eq!(g.id_to_inside(4, 1), 1);
+        assert_eq!(g.id_to_inside(4, -1), 15);
+        assert_eq!(g.id_to_inside(-1, -1), 11);
     }
 
     match v[1].as_str() {
@@ -206,6 +259,10 @@ fn main() {
             let k: usize = (n as f64 * CURRENT_BEST).ceil() as usize - 1;
             assert!(n > k);
 
+            let max_phase_x: isize = (cols as isize + 1) / 2;
+            let max_phase_y: isize = (rows as isize + 1) / 2;
+            let phases: Vec<_> = std::iter::once((0, 0)).chain((1..=max_phase_x).map(|x| (x, 0))).chain((1..=max_phase_y).map(|x| (0, x))).collect();
+
             let mut rng = rand::thread_rng();
             let mut codes = Default::default();
             for i in 0usize.. {
@@ -220,11 +277,14 @@ fn main() {
                     }
                 }
 
-                if grid.is_old(&mut codes) {
-                    let d = gcd(n, k);
-                    println!("NEW BEST!! {}/{} ({}) (from rand exec, so could be even better - retest with new upper bound)\n{}",
-                        (k / d), (n / d), (k as f64 / n as f64), grid);
-                    break;
+                for &phase in &phases {
+                    grid.phase = phase;
+                    if grid.is_old(&mut codes) {
+                        let d = gcd(n, k);
+                        println!("NEW BEST!! {}/{} ({}) (from rand exec, so could be even better - retest with new upper bound)\n{}",
+                            (k / d), (n / d), (k as f64 / n as f64), grid);
+                        break;
+                    }
                 }
 
                 if i % 65536 == 0 {
