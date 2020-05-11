@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
+
 use itertools::Itertools;
+use rand::Rng;
 
 const CURRENT_BEST: f64 = 0.25;
 
@@ -79,11 +81,13 @@ impl fmt::Debug for KGrid {
     }
 }
 impl KGrid {
-    fn new() -> Self {
+    fn new(rows: usize, cols: usize) -> Self {
+        assert_ne!(rows, 0);
+        assert_ne!(cols, 0);
+
         KGrid {
-            rows: 0,
-            cols: 0,
-            old_set: vec![],
+            rows, cols,
+            old_set: vec![false; rows * cols],
         }
     }
     fn set_size(&mut self, rows: usize, cols: usize) {
@@ -92,7 +96,6 @@ impl KGrid {
 
         self.rows = rows;
         self.cols = cols;
-
         self.old_set.clear();
         self.old_set.extend(std::iter::once(false).cycle().take(rows * cols));
     }
@@ -118,12 +121,14 @@ impl KGrid {
         }
         true
     }
-    fn calc_old_min(&mut self) -> Option<(usize, Vec<bool>)> {
+    fn calc_old_min<F>(&mut self, mut f: F) -> Option<usize>
+    where F: FnMut(usize, &Self)
+    {
         let n = self.rows * self.cols;
         assert_ne!(n, 0);
 
         let mut codes: BTreeSet<Vec<(isize, isize)>> = Default::default();
-        let mut best: Option<(usize, Vec<bool>)> = None;
+        let mut best: Option<usize> = None;
 
         for size in (1..(n as f64 * CURRENT_BEST).ceil() as usize).rev() {
             let mut works = false;
@@ -131,8 +136,9 @@ impl KGrid {
                 for x in &mut self.old_set { *x = false; }
                 for x in combo { self.old_set[x] = true; }
                 if self.is_old(&mut codes) {
-                    best = Some((size, self.old_set.clone()));
+                    best = Some(size);
                     works = true;
+                    f(size, self);
                     break;
                 }
             }
@@ -155,40 +161,80 @@ fn gcd(mut x: usize, mut y: usize) -> usize {
 
 fn main() {
     let v: Vec<String> = std::env::args().collect();
-    if v.len() != 3 {
-        eprintln!("usage: {} [rows] [cols]", v[0]);
+    if v.len() < 2 {
+        eprintln!("usage: {} [mode] (args...)", v[0]);
         std::process::exit(1);
     }
 
-    #[cfg(debug_assertions)]
-    {
-        let mut grid = KGrid::new();
-        grid.set_size(4, 4);
+    match v[1].as_str() {
+        "full" => {
+            if v.len() != 4 {
+                eprintln!("usage: {} full [rows] [cols]", v[0]);
+                std::process::exit(2);
+            }
 
-        assert_eq!(grid.id_to_inside(0, 0), 0);
-        assert_eq!(grid.id_to_inside(1, 0), 4);
-        assert_eq!(grid.id_to_inside(2, 1), 9);
-        assert_eq!(grid.id_to_inside(0, -1), 3);
-        assert_eq!(grid.id_to_inside(-1, 2), 14);
-        assert_eq!(grid.id_to_inside(4, 1), 1);
-    }
+            let rows: usize = v[2].parse().unwrap();
+            let cols: usize = v[3].parse().unwrap();
+            let mut grid = KGrid::new(rows, cols);
 
-    let rows: usize = v[1].parse().unwrap();
-    let cols: usize = v[2].parse().unwrap();
-
-    let mut grid = KGrid::new();
-    grid.set_size(rows, cols);
-
-    match grid.calc_old_min()
-    {
-        Some((min, config)) => {
-            let n = rows * cols;
-            let d = gcd(min, n);
-            grid.old_set = config; // assign config back into the grid so we can print it
-            println!("{}/{} ({})\n{}\n{:?}", min / d, n / d, (min as f64 / n as f64), grid, grid);
+            let printer = |size: usize, g: &KGrid| {
+                println!("worked for {}:\n{}", size, g);
+            };
+            match grid.calc_old_min(printer)
+            {
+                Some(min) => {
+                    let n = rows * cols;
+                    let d = gcd(min, n);
+                    println!("NEW BEST!! {}/{} ({})", (min / d), (n / d), (min as f64 / n as f64));
+                },
+                None => {
+                    println!("not better than {}", CURRENT_BEST);
+                }
+            };
         },
-        None => {
-            println!("not better than {}", CURRENT_BEST);
-        }
-    };
+        "rand" => {
+            if v.len() != 4 {
+                eprintln!("usage: {} rand [rows] [cols]", v[0]);
+                std::process::exit(2);
+            }
+
+            let rows: usize = v[2].parse().unwrap();
+            let cols: usize = v[3].parse().unwrap();
+            let mut grid = KGrid::new(rows, cols);
+
+            let n: usize = rows * cols;
+            let k: usize = (n as f64 * CURRENT_BEST).ceil() as usize - 1;
+            assert!(n > k);
+
+            let mut rng = rand::thread_rng();
+            let mut codes = Default::default();
+            for i in 0usize.. {
+                for x in &mut grid.old_set { *x = false; }
+                for _ in 0..k {
+                    loop {
+                        let p: usize = rng.gen_range(0, n);
+                        if !grid.old_set[p] {
+                            grid.old_set[p] = true;
+                            break;
+                        }
+                    }
+                }
+
+                if grid.is_old(&mut codes) {
+                    let d = gcd(n, k);
+                    println!("NEW BEST!! {}/{} ({}) (from rand exec, so could be even better - retest with new upper bound)\n{}",
+                        (k / d), (n / d), (k as f64 / n as f64), grid);
+                    break;
+                }
+
+                if i % 65536 == 0 {
+                    println!("rand iterations: {}\n{}", i, grid);
+                }
+            }
+        },
+        _ => {
+            eprintln!("usage: {} [mode] (args...)", v[0]);
+            std::process::exit(1);
+        },
+    }
 }
