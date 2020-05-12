@@ -119,39 +119,31 @@ impl KGrid {
         }
         true
     }
-    fn calc_old_min<F>(&mut self, mut f: F) -> Option<usize>
-    where F: FnMut(usize, &Self)
-    {
-        let n = self.rows * self.cols;
-        assert_ne!(n, 0);
-
-        let mut codes = Default::default();
-        let mut best = None;
+    fn calc_old_min(&mut self) -> Option<usize> {
+        assert_eq!(self.old_set.len(), self.rows * self.cols);
 
         let max_phase_x: isize = (self.cols as isize + 1) / 2;
         let max_phase_y: isize = (self.rows as isize + 1) / 2;
         let phases: Vec<_> = std::iter::once((0, 0)).chain((1..=max_phase_x).map(|x| (x, 0))).chain((1..=max_phase_y).map(|x| (0, x))).collect();
 
-        for size in (1..(n as f64 * CURRENT_BEST).ceil() as usize).rev() {
-            let mut works = false;
-            for combo in (0..n).combinations(size) {
-                for x in &mut self.old_set { *x = false; }
-                for x in combo { self.old_set[x] = true; }
+        let mut codes = Default::default();
 
-                for &phase in &phases {
-                    self.phase = phase;
-                    if self.is_old(&mut codes) {
-                        best = Some(size);
-                        works = true;
-                        f(size, self);
-                        break;
-                    }
+        let n = self.old_set.len();
+        let needed = (n as f64 * CURRENT_BEST).ceil() as usize - 1;
+
+        for combo in (0..n).combinations(needed) {
+            for x in &mut self.old_set { *x = false; }
+            for x in combo { self.old_set[x] = true; }
+
+            for phase in &phases {
+                self.phase = *phase;
+                if self.is_old(&mut codes) {
+                    return Some(needed);
                 }
             }
-            if !works { break; }
         }
         
-        best
+        None
     }
 }
 
@@ -230,15 +222,11 @@ fn main() {
             let cols: usize = v[3].parse().unwrap();
             let mut grid = KGrid::new(rows, cols);
 
-            let printer = |size: usize, g: &KGrid| {
-                println!("worked for {}:\n{}", size, g);
-            };
-            match grid.calc_old_min(printer)
-            {
+            match grid.calc_old_min() {
                 Some(min) => {
                     let n = rows * cols;
                     let d = gcd(min, n);
-                    println!("NEW BEST!! {}/{} ({})", (min / d), (n / d), (min as f64 / n as f64));
+                    println!("NEW BEST!! {}/{} ({}):\n{}", (min / d), (n / d), (min as f64 / n as f64), grid);
                 },
                 None => {
                     println!("not better than {}", CURRENT_BEST);
@@ -277,15 +265,17 @@ fn main() {
                     }
                 }
 
-                for &phase in &phases {
-                    grid.phase = phase;
+                let mut worked = false;
+                for phase in &phases {
+                    grid.phase = *phase;
                     if grid.is_old(&mut codes) {
                         let d = gcd(n, k);
-                        println!("NEW BEST!! {}/{} ({}) (from rand exec, so could be even better - retest with new upper bound)\n{}",
-                            (k / d), (n / d), (k as f64 / n as f64), grid);
+                        println!("NEW BEST!! {}/{} ({})\n{}", (k / d), (n / d), (k as f64 / n as f64), grid);
+                        worked = true;
                         break;
                     }
                 }
+                if worked { break; }
 
                 if i % 65536 == 0 {
                     println!("rand iterations: {}\n{}", i, grid);
