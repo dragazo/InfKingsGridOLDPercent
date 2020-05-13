@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use itertools::Itertools;
 use rand::Rng;
 
 const CURRENT_BEST: f64 = 0.25;
@@ -47,6 +46,12 @@ struct KGrid {
     cols: usize,
     old_set: Vec<bool>,
     phase: (isize, isize),
+}
+struct SolverData {
+    phases: Vec<(isize, isize)>,
+    codes: BTreeSet<Vec<(isize, isize)>>,
+    needed: usize,
+    prevs: Vec<(isize, isize)>,
 }
 impl fmt::Display for KGrid {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -119,31 +124,65 @@ impl KGrid {
         }
         true
     }
-    fn calc_old_min(&mut self) -> Option<usize> {
-        assert_eq!(self.old_set.len(), self.rows * self.cols);
-
-        let max_phase_x: isize = (self.cols as isize + 1) / 2;
-        let max_phase_y: isize = (self.rows as isize + 1) / 2;
-        let phases: Vec<_> = std::iter::once((0, 0)).chain((1..=max_phase_x).map(|x| (x, 0))).chain((1..=max_phase_y).map(|x| (0, x))).collect();
-
-        let mut codes = Default::default();
-
-        let n = self.old_set.len();
-        let needed = (n as f64 * CURRENT_BEST).ceil() as usize - 1;
-
-        for combo in (0..n).combinations(needed) {
-            for x in &mut self.old_set { *x = false; }
-            for x in combo { self.old_set[x] = true; }
-
-            for phase in &phases {
-                self.phase = *phase;
-                if self.is_old(&mut codes) {
-                    return Some(needed);
+    fn is_old_interior_up_to(&self, p: (isize, isize), codes: &mut BTreeSet<Vec<(isize, isize)>>) -> bool {
+        codes.clear();
+        for r in 1..p.0 - 1 {
+            for c in 1..self.cols as isize - 1 {
+                let code = self.get_locating_code(r, c);
+                if code.is_empty() || !codes.insert(code) {
+                    return false;
                 }
             }
         }
-        
-        None
+        true
+    }
+    fn calc_old_min(&mut self) -> Option<usize> {
+        assert_eq!(self.old_set.len(), self.rows * self.cols);
+        for x in &mut self.old_set {
+            *x = false;
+        }
+
+        let needed = (self.old_set.len() as f64 * CURRENT_BEST).ceil() as usize - 1;
+        let mut data = SolverData {
+            phases: {
+                let max_phase_x = (self.cols as isize + 1) / 2;
+                let max_phase_y = (self.rows as isize + 1) / 2;
+                std::iter::once((0, 0)).chain((1..=max_phase_x).map(|x| (x, 0))).chain((1..=max_phase_y).map(|y| (0, y))).collect()
+            },
+            codes: Default::default(),
+            needed,
+            prevs: Vec::with_capacity(needed),
+        };
+
+        if self.calc_old_min_interior(&mut data, 0) { Some(data.needed) } else { None }
+    }
+    fn calc_old_min_interior(&mut self, data: &mut SolverData, pos: usize) -> bool {
+        if data.needed == data.prevs.len() {
+            for phase in &data.phases {
+                self.phase = *phase;
+                if self.is_old(&mut data.codes) {
+                    return true;
+                }
+            }
+        } else if pos < self.old_set.len() {
+            let p = ((pos / self.cols) as isize, (pos % self.cols) as isize);
+
+            let good_so_far = p.1 != 0 || self.is_old_interior_up_to(p, &mut data.codes);
+
+            if good_so_far {
+                self.old_set[pos] = true;
+                data.prevs.push(p);
+                if self.calc_old_min_interior(data, pos + 1) {
+                    return true;
+                }
+                data.prevs.pop();
+                self.old_set[pos] = false;
+
+                return self.calc_old_min_interior(data, pos + 1);
+            }
+        }
+
+        false
     }
 }
 
@@ -218,10 +257,13 @@ fn main() {
                 std::process::exit(2);
             }
 
-            let rows: usize = v[2].parse().unwrap();
-            let cols: usize = v[3].parse().unwrap();
-            let mut grid = KGrid::new(rows, cols);
+            let (rows, cols) = {
+                let rows: usize = v[2].parse().unwrap();
+                let cols: usize = v[3].parse().unwrap();
+                if rows >= cols { (rows, cols) } else { (cols, rows) }
+            };
 
+            let mut grid = KGrid::new(rows, cols);
             match grid.calc_old_min() {
                 Some(min) => {
                     let n = rows * cols;
