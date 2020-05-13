@@ -22,16 +22,15 @@ impl Iterator for Adjacent {
         let c = self.col;
 
         let v = match self.state {
-            0 => (r, c - 1),
-            1 => (r, c + 1),
+            0 => (r - 1, c - 1),
+            1 => (r - 1, c),
+            2 => (r - 1, c + 1),
 
-            2 => (r - 1, c),
-            3 => (r + 1, c),
+            3 => (r, c - 1),
+            4 => (r, c + 1),
 
-            4 => (r - 1, c - 1),
-            5 => (r - 1, c + 1),
-
-            6 => (r + 1, c - 1),
+            5 => (r + 1, c - 1),
+            6 => (r + 1, c),
             7 => (r + 1, c + 1),
 
             _ => return None,
@@ -39,7 +38,12 @@ impl Iterator for Adjacent {
         self.state += 1;
         Some(v)
     }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let v = 8 - self.state;
+        (v, Some(v))
+    }
 }
+impl ExactSizeIterator for Adjacent {}
 
 struct KGrid {
     rows: usize,
@@ -50,6 +54,7 @@ struct KGrid {
 struct SolverData {
     phases: Vec<(isize, isize)>,
     codes: BTreeSet<Vec<(isize, isize)>>,
+    interior_codes: BTreeSet<Vec<(isize, isize)>>,
     needed: usize,
     prevs: Vec<(isize, isize)>,
 }
@@ -108,25 +113,49 @@ impl KGrid {
         r * self.cols + c
     }
     fn get_locating_code(&self, row: isize, col: isize) -> Vec<(isize, isize)> {
-        let mut v: Vec<_> = Adjacent::new(row, col).filter(|x| self.old_set[self.id_to_inside(x.0, x.1)]).collect();
+        let mut v = Vec::with_capacity(8);
+        for x in Adjacent::new(row, col) {
+            if self.old_set[self.id_to_inside(x.0, x.1)] {
+                v.push(x)
+            }
+        }
         v.sort();
         v
     }
-    fn is_old(&self, codes: &mut BTreeSet<Vec<(isize, isize)>>) -> bool {
+    fn is_old_with_current_phase(&self, codes: &mut BTreeSet<Vec<(isize, isize)>>, interior_codes: &BTreeSet<Vec<(isize, isize)>>) -> bool {
         codes.clear();
-        for r in -1..=self.rows as isize {
-            for c in -1..=self.cols as isize {
+        for &r in &[-1, 0, self.rows as isize - 1, self.rows as isize] {
+            for c in -1 ..= self.cols as isize {
                 let code = self.get_locating_code(r, c);
-                if code.is_empty() || !codes.insert(code) {
+                if code.is_empty() || interior_codes.contains(&code) || !codes.insert(code) {
+                    return false;
+                }
+            }
+        }
+        for r in 1 ..= self.rows as isize - 2 {
+            for &c in &[-1, 0, self.cols as isize - 1, self.cols as isize] {
+                let code = self.get_locating_code(r, c);
+                if code.is_empty() || interior_codes.contains(&code) || !codes.insert(code) {
                     return false;
                 }
             }
         }
         true
     }
-    fn is_old_interior_up_to(&self, p: (isize, isize), codes: &mut BTreeSet<Vec<(isize, isize)>>) -> bool {
+    fn is_old(&mut self, codes: &mut BTreeSet<Vec<(isize, isize)>>, interior_codes: &mut BTreeSet<Vec<(isize, isize)>>, phases: &[(isize, isize)]) -> bool {
+        if self.is_old_interior_up_to(self.rows as isize, interior_codes) {
+            for phase in phases {
+                self.phase = *phase;
+                if self.is_old_with_current_phase(codes, interior_codes) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    fn is_old_interior_up_to(&self, row: isize, codes: &mut BTreeSet<Vec<(isize, isize)>>) -> bool {
         codes.clear();
-        for r in 1..p.0 - 1 {
+        for r in 1..row - 1 {
             for c in 1..self.cols as isize - 1 {
                 let code = self.get_locating_code(r, c);
                 if code.is_empty() || !codes.insert(code) {
@@ -150,6 +179,7 @@ impl KGrid {
                 std::iter::once((0, 0)).chain((1..=max_phase_x).map(|x| (x, 0))).chain((1..=max_phase_y).map(|y| (0, y))).collect()
             },
             codes: Default::default(),
+            interior_codes: Default::default(),
             needed,
             prevs: Vec::with_capacity(needed),
         };
@@ -158,16 +188,13 @@ impl KGrid {
     }
     fn calc_old_min_interior(&mut self, data: &mut SolverData, pos: usize) -> bool {
         if data.needed == data.prevs.len() {
-            for phase in &data.phases {
-                self.phase = *phase;
-                if self.is_old(&mut data.codes) {
-                    return true;
-                }
+            if self.is_old(&mut data.codes, &mut data.interior_codes, &data.phases) {
+                return true;
             }
         } else if pos < self.old_set.len() {
             let p = ((pos / self.cols) as isize, (pos % self.cols) as isize);
 
-            let good_so_far = p.1 != 0 || self.is_old_interior_up_to(p, &mut data.codes);
+            let good_so_far = p.1 != 0 || self.is_old_interior_up_to(p.0, &mut data.codes);
 
             if good_so_far {
                 self.old_set[pos] = true;
@@ -262,6 +289,10 @@ fn main() {
                 let cols: usize = v[3].parse().unwrap();
                 if rows >= cols { (rows, cols) } else { (cols, rows) }
             };
+            if cols < 2 {
+                eprintln!("1x1, 1xn, nx1 are not supported to avoid branch conditions\nthey also cannot result in lower than 2/3");
+                std::process::exit(3);
+            }
 
             let mut grid = KGrid::new(rows, cols);
             match grid.calc_old_min() {
@@ -283,6 +314,11 @@ fn main() {
 
             let rows: usize = v[2].parse().unwrap();
             let cols: usize = v[3].parse().unwrap();
+            if rows < 2 || cols < 2 {
+                eprintln!("1x1, 1xn, nx1 are not supported to avoid branch conditions\nthey also cannot result in lower than 2/3");
+                std::process::exit(3);
+            }
+
             let mut grid = KGrid::new(rows, cols);
 
             let n: usize = rows * cols;
@@ -295,6 +331,7 @@ fn main() {
 
             let mut rng = rand::thread_rng();
             let mut codes = Default::default();
+            let mut interior_codes = Default::default();
             for i in 0usize.. {
                 for x in &mut grid.old_set { *x = false; }
                 for _ in 0..k {
@@ -307,17 +344,11 @@ fn main() {
                     }
                 }
 
-                let mut worked = false;
-                for phase in &phases {
-                    grid.phase = *phase;
-                    if grid.is_old(&mut codes) {
-                        let d = gcd(n, k);
-                        println!("NEW BEST!! {}/{} ({})\n{}", (k / d), (n / d), (k as f64 / n as f64), grid);
-                        worked = true;
-                        break;
-                    }
+                if grid.is_old(&mut codes, &mut interior_codes, &phases) {
+                    let d = gcd(n, k);
+                    println!("NEW BEST!! {}/{} ({})\n{}", (k / d), (n / d), (k as f64 / n as f64), grid);
+                    break;
                 }
-                if worked { break; }
 
                 if i % 65536 == 0 {
                     println!("rand iterations: {}\n{}", i, grid);
