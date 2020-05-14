@@ -248,11 +248,10 @@ impl KGridRect {
     }
 }
 
-#[derive(Debug)]
 enum GeometryLoadResult {
     FileOpenFailure,
-    InvalidFormat,
-    TessellationFailure,
+    InvalidFormat(&'static str),
+    TessellationFailure(&'static str),
 }
 struct FancySolverData<'a> {
     codes: BTreeSet<Vec<(isize, isize)>>,
@@ -311,6 +310,8 @@ struct KGridFancyTessellation {
     shape_with_padding: BTreeSet<(isize, isize)>,
     tessellation_map: HashMap<(isize, isize), (isize, isize)>,
     old_set: BTreeSet<(isize, isize)>,
+    basis_a: (isize, isize),
+    basis_b: (isize, isize),
 }
 impl fmt::Display for KGridFancyTessellation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -329,6 +330,8 @@ impl fmt::Display for KGridFancyTessellation {
             write!(f, "{} ", if self.old_set.contains(x) { 1 } else { 0 })?;
         }
         writeln!(f)?;
+        writeln!(f, "basis: {:?} {:?}", self.basis_a, self.basis_b)?;
+        writeln!(f, "size: {}", self.size())?;
         Ok(())
     }
 }
@@ -339,19 +342,19 @@ impl KGridFancyTessellation {
             Err(_) => return Err(GeometryLoadResult::FileOpenFailure),
         });
 
-        let (tess_a, tess_b) = {
+        let (basis_a, basis_b) = {
             let mut line = String::new();
             f.read_line(&mut line).unwrap();
 
             let args: Vec<&str> = line.split_whitespace().collect();
             if args.len() != 4 {
-                return Err(GeometryLoadResult::InvalidFormat);
+                return Err(GeometryLoadResult::InvalidFormat("expected 4 tessellation arguments as top line of file"));
             }
             let mut parsed: Vec<isize> = vec![];
             for arg in args {
                 parsed.push(match arg.parse::<isize>() {
                     Ok(x) => x,
-                    Err(_) => return Err(GeometryLoadResult::InvalidFormat),
+                    Err(_) => return Err(GeometryLoadResult::InvalidFormat("failed to parse a tessellation arg as integer")),
                 });
             }
             ((parsed[0], parsed[1]), (parsed[2], parsed[3]))
@@ -361,18 +364,15 @@ impl KGridFancyTessellation {
             let mut shape: BTreeSet<(isize, isize)> = Default::default();
             for (row, line) in f.lines().map(|x| x.unwrap()).enumerate() {
                 for (col, item) in line.split_whitespace().enumerate() {
-                    match item.parse::<u8>() {
-                        Ok(x) if x <= 1 => {
-                            if x != 0 {
-                                shape.insert((row as isize, col as isize));
-                            }
-                        },
-                        _ => return Err(GeometryLoadResult::InvalidFormat),
+                    match item {
+                        x if x.len() != 1 => return Err(GeometryLoadResult::InvalidFormat("expected geometry element to be length 1")),
+                        "." => (),
+                        _ => { shape.insert((row as isize, col as isize)); },
                     };
                 }
             }
             if shape.is_empty() {
-                return Err(GeometryLoadResult::InvalidFormat);
+                return Err(GeometryLoadResult::InvalidFormat("shape is empty"));
             }
             shape
         };
@@ -391,9 +391,9 @@ impl KGridFancyTessellation {
             for &to in &shape {
                 for i in -2..=2 {
                     for j in -2..=2 {
-                        let from = (to.0 + tess_a.0 * i + tess_b.0 * j, to.1 + tess_a.1 * i + tess_b.1 * j);
+                        let from = (to.0 + basis_a.0 * i + basis_b.0 * j, to.1 + basis_a.1 * i + basis_b.1 * j);
                         if !p.insert(from) {
-                            return Err(GeometryLoadResult::TessellationFailure);
+                            return Err(GeometryLoadResult::TessellationFailure("tessellation resulted in overlap"));
                         }
                         if shape_with_extra_padding.contains(&from) {
                             m.insert(from, to);
@@ -403,7 +403,7 @@ impl KGridFancyTessellation {
             }
             for pos in &shape_with_extra_padding {
                 if !m.contains_key(pos) {
-                    return Err(GeometryLoadResult::TessellationFailure);
+                    return Err(GeometryLoadResult::TessellationFailure("tessellation is not dense"));
                 }
             }
 
@@ -412,6 +412,7 @@ impl KGridFancyTessellation {
 
         Ok(Self {
             shape, shape_with_padding, tessellation_map,
+            basis_a, basis_b,
             old_set: Default::default(),
         })
     }
@@ -553,7 +554,11 @@ fn main() {
             let mut geo = match KGridFancyTessellation::with_shape(&v[2]) {
                 Ok(x) => x,
                 Err(e) => {
-                    eprintln!("failed to load tessellation file {} ({:?})", v[2], e);
+                    match e {
+                        GeometryLoadResult::FileOpenFailure => eprintln!("failed to open tessellation file {}", v[2]),
+                        GeometryLoadResult::InvalidFormat(msg) => eprintln!("file {} was invalid format: {}", v[2], msg),
+                        GeometryLoadResult::TessellationFailure(msg) => eprintln!("file {} had a tessellation failure: {}", v[2], msg),
+                    };
                     std::process::exit(5);
                 },
             };
