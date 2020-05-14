@@ -540,9 +540,9 @@ fn main() {
                 Some(min) => {
                     let n = rows * cols;
                     let d = gcd(min, n);
-                    println!("NEW BEST!! {}/{} ({}):\n{}", (min / d), (n / d), (min as f64 / n as f64), grid);
+                    println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), grid);
                 },
-                None => println!("not better than {}", thresh),
+                None => println!("no solution found under thresh {}", thresh),
             };
         },
         "geo" => {
@@ -564,13 +564,14 @@ fn main() {
             };
             let thresh = parse_thresh(v[3].as_str());
 
+            println!("loaded geometry {}:\n{}", v[2], geo);
             match geo.calc_old_min(thresh) {
                 Some(min) => {
                     let n = geo.size();
                     let d = gcd(min, n);
-                    println!("NEW BEST!! {}/{} ({}):\n{}", (min / d), (n / d), (min as f64 / n as f64), geo);
+                    println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), geo);
                 },
-                None => println!("not better than {}", thresh),
+                None => println!("no solution found under thresh {}", thresh),
             };
         },
         "rand" => {
