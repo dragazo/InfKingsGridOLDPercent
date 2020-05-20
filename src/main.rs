@@ -179,15 +179,18 @@ trait Solver {
     fn try_satisfy<Adj>(&mut self) -> Option<usize> where Adj: AdjacentIterator;
 }
 
-struct RectSolver<'a, Codes> {
+struct RectSolverBase<'a, Codes> {
     src: &'a mut RectTessellation,
-    phases: Vec<(isize, isize)>,
     codes: Codes,
     interior_codes: Codes,
     needed: usize,
     prevs: Vec<(isize, isize)>,
 }
-impl<Codes> RectSolver<'_, Codes> where Codes: CodeSet {
+struct RectSolver<'a, Codes> {
+    base: RectSolverBase<'a, Codes>,
+    phases: Vec<(isize, isize)>,
+}
+impl<Codes> RectSolverBase<'_, Codes> where Codes: CodeSet {
     fn id_to_inside(&self, row: isize, col: isize) -> usize {
         let col_fix = if row < 0 { col - self.src.phase.0 } else if row >= self.src.rows as isize { col + self.src.phase.0 } else { col };
         let row_fix = if col < 0 { row - self.src.phase.1 } else if col >= self.src.cols as isize { row + self.src.phase.1 } else { row };
@@ -195,6 +198,15 @@ impl<Codes> RectSolver<'_, Codes> where Codes: CodeSet {
         let r = (row_fix + 2 * self.src.rows as isize) as usize % self.src.rows;
         let c = (col_fix + 2 * self.src.cols as isize) as usize % self.src.cols;
         r * self.src.cols + c
+    }
+    fn get_locating_code<Adj: AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
+        let mut v = Vec::with_capacity(8);
+        for x in Adj::new(pos.0, pos.1) {
+            if self.src.old_set[self.id_to_inside(x.0, x.1)] {
+                v.push(x)
+            }
+        }
+        v
     }
     fn is_old_interior_up_to<Adj: AdjacentIterator>(&mut self, row: isize) -> bool {
         self.interior_codes.clear();
@@ -228,24 +240,28 @@ impl<Codes> RectSolver<'_, Codes> where Codes: CodeSet {
         }
         true
     }
+}
+impl<Codes> RectSolver<'_, Codes>
+where Codes: CodeSet
+{
     fn calc_old_min_interior<Adj: AdjacentIterator>(&mut self, pos: usize) -> bool {
-        if self.needed == self.prevs.len() {
+        if self.base.needed == self.base.prevs.len() {
             if self.is_old::<Adj>() {
                 return true;
             }
-        } else if pos < self.src.old_set.len() {
-            let p = ((pos / self.src.cols) as isize, (pos % self.src.cols) as isize);
+        } else if pos < self.base.src.old_set.len() {
+            let p = ((pos / self.base.src.cols) as isize, (pos % self.base.src.cols) as isize);
 
-            let good_so_far = p.1 != 0 || self.is_old_interior_up_to::<Adj>(p.0);
+            let good_so_far = p.1 != 0 || self.base.is_old_interior_up_to::<Adj>(p.0);
 
             if good_so_far {
-                self.src.old_set[pos] = true;
-                self.prevs.push(p);
+                self.base.src.old_set[pos] = true;
+                self.base.prevs.push(p);
                 if self.calc_old_min_interior::<Adj>(pos + 1) {
                     return true;
                 }
-                self.prevs.pop();
-                self.src.old_set[pos] = false;
+                self.base.prevs.pop();
+                self.base.src.old_set[pos] = false;
 
                 return self.calc_old_min_interior::<Adj>(pos + 1);
             }
@@ -258,24 +274,13 @@ impl<Codes> Solver for RectSolver<'_, Codes>
 where Codes: CodeSet
 {
     fn get_locating_code<Adj: AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
-        let mut v = Vec::with_capacity(8);
-        for x in Adj::new(pos.0, pos.1) {
-            if self.src.old_set[self.id_to_inside(x.0, x.1)] {
-                v.push(x)
-            }
-        }
-        v
+        self.base.get_locating_code::<Adj>(pos)
     }
     fn is_old<Adj: AdjacentIterator>(&mut self) -> bool {
-        if self.is_old_interior_up_to::<Adj>(self.src.rows as isize) {
-            // don't know how to make borrow checker understand i don't mutate phases
-            let iter = unsafe {
-                let ptr = &self.phases as *const Vec<(isize, isize)>;
-                (*ptr).iter()
-            };
-            for phase in iter {
-                self.src.phase = *phase;
-                if self.is_old_with_current_phase::<Adj>() {
+        if self.base.is_old_interior_up_to::<Adj>(self.base.src.rows as isize) {
+            for phase in &self.phases {
+                self.base.src.phase = *phase;
+                if self.base.is_old_with_current_phase::<Adj>() {
                     return true;
                 }
             }
@@ -283,10 +288,15 @@ where Codes: CodeSet
         false
     }
     fn try_satisfy<Adj: AdjacentIterator>(&mut self) -> Option<usize> {
-        for x in &mut self.src.old_set { *x = false; }
-        self.prevs.clear();
-        if self.calc_old_min_interior::<Adj>(0) { Some(self.needed) } else { None }
+        for x in &mut self.base.src.old_set { *x = false; }
+        self.base.prevs.clear();
+        if self.calc_old_min_interior::<Adj>(0) { Some(self.base.needed) } else { None }
     }
+}
+
+trait Tessellation: fmt::Display {
+    fn size(&self) -> usize;
+    fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize> where Codes: CodeSet, Adj: AdjacentIterator;
 }
 
 struct RectTessellation {
@@ -318,24 +328,33 @@ impl RectTessellation {
             phase: (0, 0),
         }
     }
-    fn size(&self) -> usize {
-        self.old_set.len()
-    }
     fn solver<Codes: CodeSet>(&mut self, thresh: f64) -> RectSolver<'_, Codes> {
         let needed = (self.old_set.len() as f64 * thresh).ceil() as usize - 1;
         let (r, c) = (self.rows, self.cols);
         RectSolver::<Codes> {
-            src: self,
+            base: RectSolverBase::<Codes> {
+                src: self,
+                codes: Default::default(),
+                interior_codes: Default::default(),
+                needed,
+                prevs: Vec::with_capacity(needed),
+            },
             phases: {
                 let max_phase_x = (r as isize + 1) / 2;
                 let max_phase_y = (c as isize + 1) / 2;
                 std::iter::once((0, 0)).chain((1..=max_phase_x).map(|x| (x, 0))).chain((1..=max_phase_y).map(|y| (0, y))).collect()
             },
-            codes: Default::default(),
-            interior_codes: Default::default(),
-            needed,
-            prevs: Vec::with_capacity(needed),
         }
+    }
+}
+impl Tessellation for RectTessellation {
+    fn size(&self) -> usize {
+        self.old_set.len()
+    }
+    fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize>
+    where Codes: CodeSet, Adj: AdjacentIterator
+    {
+        self.solver::<Codes>(thresh).try_satisfy::<Adj>()
     }
 }
 
@@ -520,9 +539,6 @@ impl GeometryTessellation {
             old_set: Default::default(),
         })
     }
-    fn size(&self) -> usize {
-        self.shape.len()
-    }
     fn solver<Codes>(&mut self, thresh: f64) -> GeometrySolver<'_, Codes>
     where Codes: CodeSet
     {
@@ -540,6 +556,16 @@ impl GeometryTessellation {
             needed,
             prevs: Vec::with_capacity(needed),
         }
+    }
+}
+impl Tessellation for GeometryTessellation {
+    fn size(&self) -> usize {
+        self.shape.len()
+    }
+    fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize>
+    where Codes: CodeSet, Adj: AdjacentIterator
+    {
+        self.solver::<Codes>(thresh).try_satisfy::<Adj>()
     }
 }
 
@@ -566,8 +592,9 @@ fn is_sorted<T: PartialOrd>(arr: &[T]) -> bool {
 
 #[test]
 fn test_rect_pos() {
-    let mut gg = RectTessellation::new(4, 4);
-    let g = gg.solver::<OLDSet>(0.9);
+    let mut ggg = RectTessellation::new(4, 4);
+    let mut gg = ggg.solver::<OLDSet>(0.9);
+    let g = &mut gg.base;
 
     assert_eq!(g.id_to_inside(0, 0), 0);
     assert_eq!(g.id_to_inside(1, 0), 4);
@@ -634,12 +661,30 @@ fn test_adjacent_tri_sorted() {
     }
 }
 
-fn main() {
-    let v: Vec<String> = std::env::args().collect();
-    if v.len() < 2 {
-        eprintln!("usage: {} (rect|geo) (old|red|det) (full|rand) (args...)", v[0]);
-        std::process::exit(1);
+fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
+    let res = match mode {
+        "old:king" => tess.try_satisfy::<OLDSet, Adjacent8>(thresh),
+        "det:king" => tess.try_satisfy::<DETSet, Adjacent8>(thresh),
+
+        "old:tri" => tess.try_satisfy::<OLDSet, AdjacentTriangle>(thresh),
+        "det:tri" => tess.try_satisfy::<DETSet, AdjacentTriangle>(thresh),
+
+        _ => {
+            eprintln!("unknown type: {}", mode);
+            std::process::exit(4);
+        }
+    };
+    match res {
+        Some(min) => {
+            let n = tess.size();
+            let d = gcd(min, n);
+            println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), tess);
+        },
+        None => println!("no solution found under thresh {}", thresh),
     }
+}
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
 
     let parse_thresh = |a: &str| {
         match a.parse::<f64>() {
@@ -654,78 +699,43 @@ fn main() {
             }
         }
     };
+    let show_usage = |ret| {
+        eprintln!("usage: {} (rect w h|geo shape) (old|det):(king|tri) [thresh]", args[0]);
+        std::process::exit(ret);
+    };
 
-    match v[1].as_str() {
+    if args.len() < 2 { show_usage(1); }
+    match args[1].as_str() {
         "rect" => {
+            if args.len() < 6 { show_usage(1); }
             let (rows, cols) = {
-                let rows: usize = v[2].parse().unwrap();
-                let cols: usize = v[3].parse().unwrap();
+                let rows: usize = args[2].parse().unwrap();
+                let cols: usize = args[3].parse().unwrap();
                 if rows >= cols { (rows, cols) } else { (cols, rows) }
             };
             if cols < 2 {
                 eprintln!("1x1, 1xn, nx1 are not supported to avoid branch conditions\nthey also cannot result in lower than 2/3");
                 std::process::exit(3);
             }
-            let mut tess = RectTessellation::new(rows, cols);
-
-            let thresh = parse_thresh(v[5].as_str());
-            let res = match v[4].as_str() {
-                "old:king" => tess.solver::<OLDSet>(thresh).try_satisfy::<Adjacent8>(),
-                "det:king" => tess.solver::<DETSet>(thresh).try_satisfy::<Adjacent8>(),
-
-                "old:tri" => tess.solver::<OLDSet>(thresh).try_satisfy::<AdjacentTriangle>(),
-                "det:tri" => tess.solver::<DETSet>(thresh).try_satisfy::<AdjacentTriangle>(),
-
-                _ => {
-                    eprintln!("unknown type: {}", v[4]);
-                    std::process::exit(4);
-                }
-            };
-
-            match res {
-                Some(min) => {
-                    let n = tess.size();
-                    let d = gcd(min, n);
-                    println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), tess);
-                },
-                None => println!("no solution found under thresh {}", thresh),
-            };
+            let tess = RectTessellation::new(rows, cols);
+            let thresh = parse_thresh(&args[5]);
+            tess_helper(tess, &args[4], thresh)
         },
         "geo" => {
-            let mut tess = match GeometryTessellation::with_shape(&v[2]) {
+            let tess = match GeometryTessellation::with_shape(&args[2]) {
                 Ok(x) => x,
                 Err(e) => {
                     match e {
-                        GeometryLoadResult::FileOpenFailure => eprintln!("failed to open tessellation file {}", v[2]),
-                        GeometryLoadResult::InvalidFormat(msg) => eprintln!("file {} was invalid format: {}", v[2], msg),
-                        GeometryLoadResult::TessellationFailure(msg) => eprintln!("file {} had a tessellation failure: {}", v[2], msg),
+                        GeometryLoadResult::FileOpenFailure => eprintln!("failed to open tessellation file {}", args[2]),
+                        GeometryLoadResult::InvalidFormat(msg) => eprintln!("file {} was invalid format: {}", args[2], msg),
+                        GeometryLoadResult::TessellationFailure(msg) => eprintln!("file {} had a tessellation failure: {}", args[2], msg),
                     };
                     std::process::exit(5);
                 },
             };
-
-            let thresh = parse_thresh(v[4].as_str());
-            let res = match v[3].as_str() {
-                "old:king" => tess.solver::<OLDSet>(thresh).try_satisfy::<Adjacent8>(),
-                "old:tri" => tess.solver::<OLDSet>(thresh).try_satisfy::<AdjacentTriangle>(),
-                _ => {
-                    eprintln!("unknown type: {}", v[3]);
-                    std::process::exit(4);
-                }
-            };
-
-            match res {
-                Some(min) => {
-                    let n = tess.size();
-                    let d = gcd(min, n);
-                    println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), tess);
-                },
-                None => println!("no solution found under thresh {}", thresh),
-            };
+            let thresh = parse_thresh(&args[4]);
+            tess_helper(tess, &args[3], thresh)
         },
-        _ => {
-            eprintln!("usage: {} (rect|geo) args...", v[0]);
-            std::process::exit(2);
-        }
+        _ => show_usage(1),
     };
 }
