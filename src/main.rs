@@ -5,7 +5,7 @@ use std::fs::File;
 use std::path::Path;
 //use rand::Rng;
 
-// additionally required to iterate in lexicographic sorted order (see unit tests below)
+// additionally required to iterate in lexicographic sorted order and not have duplicates (see unit tests below)
 trait AdjacentIterator: Iterator<Item = (isize, isize)> {
     fn new(row: isize, col: isize) -> Self;
 }
@@ -123,6 +123,8 @@ impl ExactSizeIterator for AdjacentTriangle {}
 
 trait CodeSet: Default {
     fn clear(&mut self);
+    fn is_empty(&self) -> bool;
+    fn len(&self) -> usize;
     fn can_add(&self, code: &Vec<(isize, isize)>) -> bool;
     fn add(&mut self, code: Vec<(isize, isize)>) -> bool;
 }
@@ -134,6 +136,12 @@ struct OLDSet {
 impl CodeSet for OLDSet {
     fn clear(&mut self) {
         self.codes.clear();
+    }
+    fn is_empty(&self) -> bool {
+        self.codes.is_empty()
+    }
+    fn len(&self) -> usize {
+        self.codes.len()
     }
     fn can_add(&self, code: &Vec<(isize, isize)>) -> bool {
         !code.is_empty() && !self.codes.contains(code)
@@ -155,11 +163,18 @@ impl CodeSet for DETSet {
     fn clear(&mut self) {
         self.codes.clear();
     }
+    fn is_empty(&self) -> bool {
+        self.codes.is_empty()
+    }
+    fn len(&self) -> usize {
+        self.codes.len()
+    }
     fn can_add(&self, code: &Vec<(isize, isize)>) -> bool {
         if code.len() < 2 { return false; }
         for other in &self.codes {
-            if code.iter().filter(|x| !other.contains(x)).count() < 2 && other.iter().filter(|x| !code.contains(x)).count() < 2 {
-                return false; 
+            let equal = count_equal(&*other, code);
+            if equal + 2 > other.len() && equal + 2 > code.len() {
+                return false;
             }
         }
         true
@@ -569,6 +584,20 @@ impl Tessellation for GeometryTessellation {
     }
 }
 
+fn count_equal<T>(arr_1: &[T], arr_2: &[T]) -> usize
+where T: PartialOrd
+{
+    let mut pos = 0;
+    let mut count = 0;
+
+    for val in arr_1 {
+        while pos < arr_2.len() && val > &arr_2[pos] { pos += 1; }
+        if pos >= arr_2.len() { break; }
+        if val == &arr_2[pos] { count += 1; }
+    }
+
+    count
+}
 // source: https://doc.rust-lang.org/std/ops/trait.Div.html
 fn gcd(mut x: usize, mut y: usize) -> usize {
     while y != 0 {
@@ -590,6 +619,106 @@ fn is_sorted<T: PartialOrd>(arr: &[T]) -> bool {
     true
 }
 
+#[test]
+fn test_det_set() {
+    let mut s: DETSet = Default::default();
+    
+    assert!(s.is_empty());
+    assert!(!s.add(vec![]));
+    assert!(s.is_empty());
+    assert!(!s.add(vec![(0, 1)]));
+    assert!(s.is_empty());
+    
+    assert!(s.add(vec![(0, 1), (0, 2)]));
+    assert_eq!(s.len(), 1);
+    assert!(!s.add(vec![(0, 1), (0, 2)]));
+    assert_eq!(s.len(), 1);
+
+    assert!(!s.add(vec![(0, 2), (0, 3)]));
+    assert_eq!(s.len(), 1);
+
+    assert!(s.add(vec![(0, 3), (0, 4)]));
+    assert_eq!(s.len(), 2);
+
+    assert!(!s.add(vec![(0, 2), (0, 5)]));
+    assert_eq!(s.len(), 2);
+    assert!(!s.add(vec![(0, 2), (0, 4)]));
+    assert_eq!(s.len(), 2);
+
+    assert!(!s.add(vec![(0, 3), (0, 4)]));
+    assert_eq!(s.len(), 2);
+    assert!(!s.add(vec![(0, 3), (0, 4), (0, 5)]));
+    assert_eq!(s.len(), 2);
+    assert!(s.add(vec![(0, 3), (0, 4), (0, 5), (0, 6)]));
+    assert_eq!(s.len(), 3);
+
+    assert!(s.add(vec![(0, 6), (1, 2)]));
+    assert_eq!(s.len(), 4);
+    assert!(s.add(vec![(0, 4), (1, 5), (1, 6)]));
+    assert_eq!(s.len(), 5);
+}
+#[test]
+fn test_count_equal() {
+    assert_eq!(count_equal(&[0i32;0], &[]), 0);
+    assert_eq!(count_equal(&[1], &[]), 0);
+    assert_eq!(count_equal(&[1, 2], &[]), 0);
+    assert_eq!(count_equal(&[], &[2]), 0);
+    assert_eq!(count_equal(&[], &[2, 3]), 0);
+
+    assert_eq!(count_equal(&[1, 2, 3], &[4, 5, 6]), 0);
+    assert_eq!(count_equal(&[1], &[4, 5, 6]), 0);
+    assert_eq!(count_equal(&[1, 2, 3], &[4, 5, 6, 7, 8, 9]), 0);
+    // symmetric
+    assert_eq!(count_equal(&[4, 5, 6], &[1, 2, 3]), 0);
+    assert_eq!(count_equal(&[4, 5, 6], &[1]), 0);
+    assert_eq!(count_equal(&[4, 5, 6, 7, 8, 9], &[1, 2, 3]), 0);
+
+    assert_eq!(count_equal(&[1, 2, 3], &[1, 5, 6]), 1);
+    assert_eq!(count_equal(&[1, 2, 3], &[1, 5, 6]), 1);
+    // symmetric
+    assert_eq!(count_equal(&[1, 5, 6], &[1, 2, 3]), 1);
+    assert_eq!(count_equal(&[1, 5, 6], &[1, 2, 3]), 1);
+
+    assert_eq!(count_equal(&[1, 2, 3], &[1, 3, 5, 6]), 2);
+    assert_eq!(count_equal(&[1, 2, 3], &[-5, -2, 1, 3, 5, 6]), 2);
+    assert_eq!(count_equal(&[1, 2, 3], &[-5, -2, 0, 1, 3, 5, 6]), 2);
+    // symmetric
+    assert_eq!(count_equal(&[1, 3, 5, 6], &[1, 2, 3]), 2);
+    assert_eq!(count_equal(&[-5, -2, 1, 3, 5, 6], &[1, 2, 3]), 2);
+    assert_eq!(count_equal(&[-5, -2, 0, 1, 3, 5, 6], &[1, 2, 3]), 2);
+
+    assert_eq!(count_equal(&[6, 16, 22, 23], &[6, 16, 22, 23]), 4);
+    assert_eq!(count_equal(&[6, 16, 22, 23, 77], &[6, 16, 22, 23, 77]), 5);
+    assert_eq!(count_equal(&[6, 16, 22, 23, 77, 102], &[6, 16, 22, 23, 77, 102]), 6);
+
+    assert_eq!(count_equal(&[6, 16, 22, 23], &[6, 16, 17, 18, 19, 22, 23]), 4);
+    assert_eq!(count_equal(&[6, 16, 22, 23, 77], &[6, 16, 22, 23, 24, 77]), 5);
+    assert_eq!(count_equal(&[6, 16, 22, 23, 77, 102], &[6, 7, 16, 22, 23, 70, 71, 72, 77, 100, 102]), 6);
+    // symmetric
+    assert_eq!(count_equal(&[6, 16, 17, 18, 19, 22, 23], &[6, 16, 22, 23]), 4);
+    assert_eq!(count_equal(&[6, 16, 22, 23, 24, 77], &[6, 16, 22, 23, 77]), 5);
+    assert_eq!(count_equal(&[6, 7, 16, 22, 23, 70, 71, 72, 77, 100, 102], &[6, 16, 22, 23, 77, 102]), 6);
+
+    assert_eq!(count_equal(&[10, 100, 1000], &[1, 2, 3]), 0);
+    assert_eq!(count_equal(&[10, 100, 1000], &[15, 18, 90, 98, 99]), 0);
+    assert_eq!(count_equal(&[10, 100, 1000], &[101, 104, 204, 598, 999]), 0);
+    assert_eq!(count_equal(&[10, 100, 1000], &[100, 101, 104, 204, 598, 999]), 1);
+    assert_eq!(count_equal(&[10, 100, 1000], &[101, 104, 204, 598, 999, 1000]), 1);
+    assert_eq!(count_equal(&[10, 100, 1000], &[100, 101, 104, 204, 598, 999, 1000]), 2);
+    assert_eq!(count_equal(&[10, 100, 1000], &[1002, 1044, 1843, 2948, 1934]), 0);
+    assert_eq!(count_equal(&[10, 100, 1000], &[1000, 1002, 1044, 1843, 2948, 1934]), 1);
+    assert_eq!(count_equal(&[10, 100, 1000], &[999, 1000, 1002, 1044, 1843, 2948, 1934]), 1);
+    // symmetric
+    assert_eq!(count_equal(&[1, 2, 3], &[10, 100, 1000]), 0);
+    assert_eq!(count_equal(&[15, 18, 90, 98, 99], &[10, 100, 1000]), 0);
+    assert_eq!(count_equal(&[101, 104, 204, 598, 999], &[10, 100, 1000]), 0);
+    assert_eq!(count_equal(&[100, 101, 104, 204, 598, 999], &[10, 100, 1000]), 1);
+    assert_eq!(count_equal(&[101, 104, 204, 598, 999, 1000], &[10, 100, 1000]), 1);
+    assert_eq!(count_equal(&[100, 101, 104, 204, 598, 999, 1000], &[10, 100, 1000]), 2);
+    assert_eq!(count_equal(&[1002, 1044, 1843, 2948, 1934], &[10, 100, 1000]), 0);
+    assert_eq!(count_equal(&[1000, 1002, 1044, 1843, 2948, 1934], &[10, 100, 1000]), 1);
+    assert_eq!(count_equal(&[999, 1000, 1002, 1044, 1843, 2948, 1934], &[10, 100, 1000]), 1);
+}
 #[test]
 fn test_rect_pos() {
     let mut ggg = RectTessellation::new(4, 4);
