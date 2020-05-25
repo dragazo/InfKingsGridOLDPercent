@@ -902,6 +902,7 @@ fn main() {
                 },
             };
             let thresh = parse_thresh(&args[4]);
+            println!("loaded geometry:\n{}", tess);
             tess_helper(tess, &args[3], thresh)
         },
         _ => show_usage(1),
