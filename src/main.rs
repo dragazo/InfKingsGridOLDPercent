@@ -380,8 +380,10 @@ enum GeometryLoadResult {
 }
 struct GeometrySolver<'a, Codes> {
     shape: &'a BTreeSet<(isize, isize)>,
+    interior: &'a BTreeSet<(isize, isize)>,
     shape_with_padding: &'a BTreeSet<(isize, isize)>,
     tessellation_map: &'a HashMap<(isize, isize), (isize, isize)>,
+    first_per_row: &'a HashSet<(isize, isize)>,
     old_set: &'a mut BTreeSet<(isize, isize)>,
 
     codes: Codes,
@@ -391,6 +393,17 @@ struct GeometrySolver<'a, Codes> {
 impl<'a, Codes> GeometrySolver<'a, Codes>
 where Codes: CodeSet
 {
+    fn is_old_interior_up_to<Adj: AdjacentIterator>(&mut self, row: isize) -> bool {
+        self.codes.clear();
+        for p in self.interior {
+            if p.0 >= row - 1 { break; }
+            let code = self.get_locating_code::<Adj>(*p);
+            if !self.codes.add(code) {
+                return false;
+            }
+        }
+        true
+    }
     fn calc_old_min_interior<'b, Adj, P>(&mut self, mut pos: P) -> bool
     where Adj: AdjacentIterator, P: Iterator<Item = &'b (isize, isize)> + Clone
     {
@@ -399,15 +412,19 @@ where Codes: CodeSet
                 return true;
             }
         } else if let Some(&p) = pos.next() {
-            self.old_set.insert(p);
-            self.prevs.push(p);
-            if self.calc_old_min_interior::<Adj, _>(pos.clone()) {
-                return true;
-            }
-            self.prevs.pop();
-            self.old_set.remove(&p);
+            let good_so_far = !self.first_per_row.contains(&p) || self.is_old_interior_up_to::<Adj>(p.0);
 
-            return self.calc_old_min_interior::<Adj, _>(pos);
+            if good_so_far {
+                self.old_set.insert(p);
+                self.prevs.push(p);
+                if self.calc_old_min_interior::<Adj, _>(pos.clone()) {
+                    return true;
+                }
+                self.prevs.pop();
+                self.old_set.remove(&p);
+
+                return self.calc_old_min_interior::<Adj, _>(pos);
+            }
         }
 
         false
@@ -445,8 +462,10 @@ where Codes: CodeSet
 
 struct GeometryTessellation {
     shape: BTreeSet<(isize, isize)>,
+    interior: BTreeSet<(isize, isize)>,
     shape_with_padding: BTreeSet<(isize, isize)>,
     tessellation_map: HashMap<(isize, isize), (isize, isize)>,
+    first_per_row: HashSet<(isize, isize)>,
     old_set: BTreeSet<(isize, isize)>,
     basis_a: (isize, isize),
     basis_b: (isize, isize),
@@ -514,6 +533,21 @@ impl GeometryTessellation {
             }
             shape
         };
+        let interior = {
+            let boundary: BTreeSet<_> = shape.iter().filter(|x| Adjacent8::new(x.0, x.1).any(|y| !shape.contains(&y))).cloned().collect();
+            &shape - &boundary
+        };
+        let first_per_row = {
+            let mut s: HashSet<(isize, isize)> = Default::default();
+            let mut r = !0;
+            for p in &shape {
+                if p.0 != r {
+                    r = p.0;
+                    s.insert(*p);
+                }
+            }
+            s
+        };
 
         let shape_with_padding: BTreeSet<_> = {
             shape.clone().into_iter().flat_map(|x| Adjacent8::new(x.0, x.1)).collect()
@@ -549,7 +583,7 @@ impl GeometryTessellation {
         };
 
         Ok(Self {
-            shape, shape_with_padding, tessellation_map,
+            shape, interior, shape_with_padding, tessellation_map, first_per_row,
             basis_a, basis_b,
             old_set: Default::default(),
         })
@@ -563,8 +597,10 @@ impl GeometryTessellation {
         let needed = (self.size() as f64 * thresh).ceil() as usize - 1;
         GeometrySolver::<Codes> {
             shape: &self.shape,
+            interior: &self.interior,
             shape_with_padding: &self.shape_with_padding,
             tessellation_map: &self.tessellation_map,
+            first_per_row: &self.first_per_row,
             old_set: &mut self.old_set,
 
             codes: Default::default(),
@@ -797,6 +833,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
 
         "old:tri" => tess.try_satisfy::<OLDSet, AdjacentTriangle>(thresh),
         "det:tri" => tess.try_satisfy::<DETSet, AdjacentTriangle>(thresh),
+
+        "old:grid" => tess.try_satisfy::<OLDSet, Adjacent4>(thresh),
+        "det:grid" => tess.try_satisfy::<DETSet, Adjacent4>(thresh),
 
         _ => {
             eprintln!("unknown type: {}", mode);
