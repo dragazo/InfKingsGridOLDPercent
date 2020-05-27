@@ -550,10 +550,14 @@ impl GeometryTessellation {
         };
 
         let shape_with_padding: BTreeSet<_> = {
-            shape.clone().into_iter().flat_map(|x| Adjacent8::new(x.0, x.1)).collect()
+            let mut t = shape.clone();
+            t.extend(shape.iter().flat_map(|x| Adjacent8::new(x.0, x.1)));
+            t
         };
         let shape_with_extra_padding: BTreeSet<_> = {
-            shape_with_padding.clone().into_iter().flat_map(|x| Adjacent8::new(x.0, x.1)).collect()
+            let mut t = shape_with_padding.clone();
+            t.extend(shape_with_padding.iter().flat_map(|x| Adjacent8::new(x.0, x.1)));
+            t
         };
 
         let tessellation_map = {
@@ -683,11 +687,9 @@ impl<Codes: CodeSet> LowerBoundSearcher<Codes> {
     fn calc<Adj: AdjacentIterator>(&mut self, thresh: f64) -> ((usize, usize), f64) {
         {
             // generate the iteration area - center extended twice, excluding center itself
-            let mut area: BTreeSet<(isize, isize)> = Default::default();
-            for p in Adj::new(2, 2) {
-                area.insert(p);
-            }
-            let mut t = area.into_iter().flat_map(|p| Adj::new(p.0, p.1)).collect::<BTreeSet<_>>();
+            let area: BTreeSet<_> = Adj::new(2, 2).collect();
+            let mut t = area.clone();
+            t.extend(area.into_iter().flat_map(|p| Adj::new(p.0, p.1)));
             t.remove(&(2, 2)); // remove center in case it was added from the extension
 
             self.iter_pos.clear();
@@ -695,7 +697,7 @@ impl<Codes: CodeSet> LowerBoundSearcher<Codes> {
                 self.iter_pos.push(self.to_index(p.0, p.1));
             }
         }
-
+        
         // everything starts as false except the center vertex
         for x in self.data.iter_mut() { *x = false; }
         self.data[self.to_index(2, 2)] = true;
