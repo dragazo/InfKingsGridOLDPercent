@@ -172,8 +172,41 @@ impl CodeSet for DETSet {
     fn can_add(&self, code: &Vec<(isize, isize)>) -> bool {
         if code.len() < 2 { return false; }
         for other in &self.codes {
-            let equal = count_equal(&*other, code);
+            let equal = count_equal(other, code);
             if equal + 2 > other.len() && equal + 2 > code.len() {
+                return false;
+            }
+        }
+        true
+    }
+    fn add(&mut self, code: Vec<(isize, isize)>) -> bool {
+        if self.can_add(&code) {
+            self.codes.push(code);
+            true
+        }
+        else { false }
+    }
+}
+
+#[derive(Default)]
+struct REDSet {
+    codes: Vec<Vec<(isize, isize)>>,
+}
+impl CodeSet for REDSet {
+    fn clear(&mut self) {
+        self.codes.clear();
+    }
+    fn is_empty(&self) -> bool {
+        self.codes.is_empty()
+    }
+    fn len(&self) -> usize {
+        self.codes.len()
+    }
+    fn can_add(&self, code: &Vec<(isize, isize)>) -> bool {
+        if code.len() < 2 { return false; }
+        for other in &self.codes {
+            let equal = count_equal(other, code);
+            if other.len() + code.len() - 2 * equal < 2 {
                 return false;
             }
         }
@@ -938,12 +971,15 @@ fn test_lower_bound_index() {
 fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
     let res = match mode {
         "old:king" => tess.try_satisfy::<OLDSet, Adjacent8>(thresh),
+        "red:king" => tess.try_satisfy::<REDSet, Adjacent8>(thresh),
         "det:king" => tess.try_satisfy::<DETSet, Adjacent8>(thresh),
 
         "old:tri" => tess.try_satisfy::<OLDSet, AdjacentTriangle>(thresh),
+        "red:tri" => tess.try_satisfy::<REDSet, AdjacentTriangle>(thresh),
         "det:tri" => tess.try_satisfy::<DETSet, AdjacentTriangle>(thresh),
 
         "old:grid" => tess.try_satisfy::<OLDSet, Adjacent4>(thresh),
+        "red:grid" => tess.try_satisfy::<REDSet, Adjacent4>(thresh),
         "det:grid" => tess.try_satisfy::<DETSet, Adjacent4>(thresh),
 
         _ => {
@@ -963,12 +999,15 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
 fn theo_helper(mode: &str, thresh: f64) {
     let ((n, k), f) = match mode {
         "old:king" => LowerBoundSearcher::<OLDSet>::new().calc::<Adjacent8>(thresh),
+        "red:king" => LowerBoundSearcher::<REDSet>::new().calc::<Adjacent8>(thresh),
         "det:king" => LowerBoundSearcher::<DETSet>::new().calc::<Adjacent8>(thresh),
 
         "old:tri" => LowerBoundSearcher::<OLDSet>::new().calc::<AdjacentTriangle>(thresh),
+        "red:tri" => LowerBoundSearcher::<REDSet>::new().calc::<AdjacentTriangle>(thresh),
         "det:tri" => LowerBoundSearcher::<DETSet>::new().calc::<AdjacentTriangle>(thresh),
 
         "old:grid" => LowerBoundSearcher::<OLDSet>::new().calc::<Adjacent4>(thresh),
+        "red:grid" => LowerBoundSearcher::<REDSet>::new().calc::<Adjacent4>(thresh),
         "det:grid" => LowerBoundSearcher::<DETSet>::new().calc::<Adjacent4>(thresh),
 
         _ => {
