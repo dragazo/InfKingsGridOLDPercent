@@ -620,6 +620,107 @@ impl Tessellation for GeometryTessellation {
     }
 }
 
+struct LowerBoundSearcher<Codes> {
+    data: [bool; 25],
+    iter_pos: Vec<usize>,
+    codes: Codes,
+    highest: f64,
+    thresh: f64,
+}
+impl<Codes: CodeSet> LowerBoundSearcher<Codes> {
+    fn to_index(&self, row: isize, col: isize) -> usize {
+        row as usize * 5 + col as usize
+    }
+    fn get_locating_code<Adj: AdjacentIterator>(&self, row: isize, col: isize) -> Vec<(isize, isize)> {
+        let mut v = Vec::with_capacity(8);
+        for p in Adj::new(row, col) {
+            if self.data[self.to_index(p.0, p.1)] {
+                v.push(p);
+            }
+        }
+        v
+    }
+    fn get_locating_code_size<Adj: AdjacentIterator>(&self, row: isize, col: isize) -> usize {
+        Adj::new(row, col).filter(|p| self.data[self.to_index(p.0, p.1)]).count()
+    }
+    fn is_valid<Adj: AdjacentIterator>(&mut self) -> bool {
+        self.codes.clear();
+        for p in std::iter::once((2, 2)).chain(Adj::new(2, 2)) {
+            let code = self.get_locating_code::<Adj>(p.0, p.1);
+            if !self.codes.add(code) {
+                return false;
+            }
+        }
+        true
+    }
+    fn calc_share<Adj: AdjacentIterator>(&self, row: isize, col: isize) -> f64 {
+        assert!(self.data[self.to_index(row, col)]);
+
+        let mut share = 0.0;
+        for p in Adj::new(row, col) {
+            let c = self.get_locating_code_size::<Adj>(p.0, p.1);
+            share += 1.0 / c as f64;
+        }
+        share
+    }
+    fn calc_recursive<Adj: AdjacentIterator>(&mut self, pos: usize) {
+        if pos >= self.iter_pos.len() {
+            if self.is_valid::<Adj>() {
+                let share = self.calc_share::<Adj>(2, 2);
+                if self.highest < share {
+                    self.highest = share;
+                }
+            }
+        }
+        else {
+            // recurse on both possibilities
+            self.data[self.iter_pos[pos]] = true;
+            self.calc_recursive::<Adj>(pos + 1);
+            self.data[self.iter_pos[pos]] = false;
+            self.calc_recursive::<Adj>(pos + 1);
+        }
+    }
+    fn calc<Adj: AdjacentIterator>(&mut self, thresh: f64) -> ((usize, usize), f64) {
+        {
+            // generate the iteration area - center extended twice, excluding center itself
+            let mut area: BTreeSet<(isize, isize)> = Default::default();
+            for p in Adj::new(2, 2) {
+                area.insert(p);
+            }
+            let mut t = area.into_iter().flat_map(|p| Adj::new(p.0, p.1)).collect::<BTreeSet<_>>();
+            t.remove(&(2, 2)); // remove center in case it was added from the extension
+
+            self.iter_pos.clear();
+            for p in t.into_iter() {
+                self.iter_pos.push(self.to_index(p.0, p.1));
+            }
+        }
+
+        // everything starts as false except the center vertex
+        for x in self.data.iter_mut() { *x = false; }
+        self.data[self.to_index(2, 2)] = true;
+
+        // set current highest as zero and begin recursive search
+        self.highest = 0.0;
+        self.thresh = thresh;
+        self.calc_recursive::<Adj>(0);
+
+        // lcm(1..=8) = 840, so multiply and divide by 840 to create an exact fractional representation
+        let v = (self.highest * 840.0).round() as usize;
+        let d = gcd(v, 840);
+        ((840 / d, v / d), 1.0 / self.highest)
+    }
+    fn new() -> Self {
+        Self {
+            data: [false; 25],
+            iter_pos: vec![],
+            codes: Default::default(),
+            highest: 0.0,
+            thresh: 0.0,
+        }
+    }
+}
+
 fn count_equal<T>(arr_1: &[T], arr_2: &[T]) -> usize
 where T: PartialOrd
 {
@@ -825,6 +926,12 @@ fn test_adjacent_tri_sorted() {
         assert!(is_sorted(&v));
     }
 }
+#[test]
+fn test_lower_bound_index() {
+    let v = LowerBoundSearcher::<OLDSet>::new();
+    assert_eq!(v.to_index(0, 0), 0);
+    assert_eq!(v.to_index(2, 1), 11);
+}
 
 fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
     let res = match mode {
@@ -851,6 +958,25 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
         None => println!("no solution found under thresh {}", thresh),
     }
 }
+fn theo_helper(mode: &str, thresh: f64) {
+    let ((n, k), f) = match mode {
+        "old:king" => LowerBoundSearcher::<OLDSet>::new().calc::<Adjacent8>(thresh),
+        "det:king" => LowerBoundSearcher::<DETSet>::new().calc::<Adjacent8>(thresh),
+
+        "old:tri" => LowerBoundSearcher::<OLDSet>::new().calc::<AdjacentTriangle>(thresh),
+        "det:tri" => LowerBoundSearcher::<DETSet>::new().calc::<AdjacentTriangle>(thresh),
+
+        "old:grid" => LowerBoundSearcher::<OLDSet>::new().calc::<Adjacent4>(thresh),
+        "det:grid" => LowerBoundSearcher::<DETSet>::new().calc::<Adjacent4>(thresh),
+
+        _ => {
+            eprintln!("unknown type: {}", mode);
+            std::process::exit(4);
+        }
+    };
+
+    println!("found theo lower bound {}/{} ({})", n, k, f);
+}
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -867,13 +993,18 @@ fn main() {
             }
         }
     };
-    let show_usage = |ret| {
+    let show_usage = |ret| -> ! {
         eprintln!("usage: {} (rect w h|geo shape) (old|det):(king|tri) [thresh]", args[0]);
         std::process::exit(ret);
     };
 
     if args.len() < 2 { show_usage(1); }
     match args[1].as_str() {
+        "theo" => {
+            if args.len() < 4 { show_usage(1); }
+            let thresh = parse_thresh(&args[3]);
+            theo_helper(&args[2], thresh);
+        }
         "rect" => {
             if args.len() < 6 { show_usage(1); }
             let (rows, cols) = {
@@ -888,7 +1019,7 @@ fn main() {
             let tess = RectTessellation::new(rows, cols);
             let thresh = parse_thresh(&args[5]);
             tess_helper(tess, &args[4], thresh)
-        },
+        }
         "geo" => {
             let tess = match GeometryTessellation::with_shape(&args[2]) {
                 Ok(x) => x,
@@ -904,7 +1035,7 @@ fn main() {
             let thresh = parse_thresh(&args[4]);
             println!("loaded geometry:\n{}", tess);
             tess_helper(tess, &args[3], thresh)
-        },
+        }
         _ => show_usage(1),
     };
 }
