@@ -121,19 +121,23 @@ impl Iterator for AdjacentTriangle {
 }
 impl ExactSizeIterator for AdjacentTriangle {}
 
-trait CodeSet: Default {
+trait CodeSet<T>: Default {
     fn clear(&mut self);
     fn is_empty(&self) -> bool;
     fn len(&self) -> usize;
-    fn can_add(&self, code: &Vec<(isize, isize)>) -> bool;
-    fn add(&mut self, code: Vec<(isize, isize)>) -> bool;
+    fn can_add(&self, code: &Vec<T>) -> bool;
+    fn add(&mut self, code: Vec<T>) -> bool;
 }
 
 #[derive(Default)]
-struct OLDSet {
-    codes: BTreeSet<Vec<(isize, isize)>>,
+struct OLDSet<T>
+where T: Ord + Default
+{
+    codes: BTreeSet<Vec<T>>,
 }
-impl CodeSet for OLDSet {
+impl<T> CodeSet<T> for OLDSet<T>
+where T: Ord + Default
+{
     fn clear(&mut self) {
         self.codes.clear();
     }
@@ -143,10 +147,10 @@ impl CodeSet for OLDSet {
     fn len(&self) -> usize {
         self.codes.len()
     }
-    fn can_add(&self, code: &Vec<(isize, isize)>) -> bool {
+    fn can_add(&self, code: &Vec<T>) -> bool {
         !code.is_empty() && !self.codes.contains(code)
     }
-    fn add(&mut self, code: Vec<(isize, isize)>) -> bool {
+    fn add(&mut self, code: Vec<T>) -> bool {
         if self.can_add(&code) {
             self.codes.insert(code);
             true
@@ -156,10 +160,14 @@ impl CodeSet for OLDSet {
 }
 
 #[derive(Default)]
-struct DETSet {
-    codes: Vec<Vec<(isize, isize)>>,
+struct DETSet<T>
+where T: Ord + Default
+{
+    codes: Vec<Vec<T>>,
 }
-impl CodeSet for DETSet {
+impl<T> CodeSet<T> for DETSet<T>
+where T: Ord + Default
+{
     fn clear(&mut self) {
         self.codes.clear();
     }
@@ -169,7 +177,7 @@ impl CodeSet for DETSet {
     fn len(&self) -> usize {
         self.codes.len()
     }
-    fn can_add(&self, code: &Vec<(isize, isize)>) -> bool {
+    fn can_add(&self, code: &Vec<T>) -> bool {
         if code.len() < 2 { return false; }
         for other in &self.codes {
             let equal = count_equal(other, code);
@@ -179,7 +187,7 @@ impl CodeSet for DETSet {
         }
         true
     }
-    fn add(&mut self, code: Vec<(isize, isize)>) -> bool {
+    fn add(&mut self, code: Vec<T>) -> bool {
         if self.can_add(&code) {
             self.codes.push(code);
             true
@@ -189,10 +197,14 @@ impl CodeSet for DETSet {
 }
 
 #[derive(Default)]
-struct REDSet {
-    codes: Vec<Vec<(isize, isize)>>,
+struct REDSet<T>
+where T: Ord + Default
+{
+    codes: Vec<Vec<T>>,
 }
-impl CodeSet for REDSet {
+impl<T> CodeSet<T> for REDSet<T>
+where T: Ord + Default
+{
     fn clear(&mut self) {
         self.codes.clear();
     }
@@ -202,7 +214,7 @@ impl CodeSet for REDSet {
     fn len(&self) -> usize {
         self.codes.len()
     }
-    fn can_add(&self, code: &Vec<(isize, isize)>) -> bool {
+    fn can_add(&self, code: &Vec<T>) -> bool {
         if code.len() < 2 { return false; }
         for other in &self.codes {
             let equal = count_equal(other, code);
@@ -212,7 +224,7 @@ impl CodeSet for REDSet {
         }
         true
     }
-    fn add(&mut self, code: Vec<(isize, isize)>) -> bool {
+    fn add(&mut self, code: Vec<T>) -> bool {
         if self.can_add(&code) {
             self.codes.push(code);
             true
@@ -238,7 +250,7 @@ struct RectSolver<'a, Codes> {
     base: RectSolverBase<'a, Codes>,
     phases: Vec<(isize, isize)>,
 }
-impl<Codes> RectSolverBase<'_, Codes> where Codes: CodeSet {
+impl<Codes> RectSolverBase<'_, Codes> where Codes: CodeSet<(isize, isize)> {
     fn id_to_inside(&self, row: isize, col: isize) -> usize {
         let col_fix = if row < 0 { col - self.src.phase.0 } else if row >= self.src.rows as isize { col + self.src.phase.0 } else { col };
         let row_fix = if col < 0 { row - self.src.phase.1 } else if col >= self.src.cols as isize { row + self.src.phase.1 } else { row };
@@ -290,7 +302,7 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: CodeSet {
     }
 }
 impl<Codes> RectSolver<'_, Codes>
-where Codes: CodeSet
+where Codes: CodeSet<(isize, isize)>
 {
     fn calc_old_min_interior<Adj: AdjacentIterator>(&mut self, pos: usize) -> bool {
         if self.base.needed == self.base.prevs.len() {
@@ -319,7 +331,7 @@ where Codes: CodeSet
     }
 }
 impl<Codes> Solver for RectSolver<'_, Codes>
-where Codes: CodeSet
+where Codes: CodeSet<(isize, isize)>
 {
     fn get_locating_code<Adj: AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
         self.base.get_locating_code::<Adj>(pos)
@@ -344,7 +356,8 @@ where Codes: CodeSet
 
 trait Tessellation: fmt::Display {
     fn size(&self) -> usize;
-    fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize> where Codes: CodeSet, Adj: AdjacentIterator;
+    fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize>
+    where Codes: CodeSet<(isize, isize)>, Adj: AdjacentIterator;
 }
 
 struct RectTessellation {
@@ -376,7 +389,9 @@ impl RectTessellation {
             phase: (0, 0),
         }
     }
-    fn solver<Codes: CodeSet>(&mut self, thresh: f64) -> RectSolver<'_, Codes> {
+    fn solver<Codes>(&mut self, thresh: f64) -> RectSolver<'_, Codes>
+    where Codes: CodeSet<(isize, isize)>
+    {
         let needed = (self.old_set.len() as f64 * thresh).ceil() as usize - 1;
         let (r, c) = (self.rows, self.cols);
         RectSolver::<Codes> {
@@ -400,7 +415,7 @@ impl Tessellation for RectTessellation {
         self.old_set.len()
     }
     fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize>
-    where Codes: CodeSet, Adj: AdjacentIterator
+    where Codes: CodeSet<(isize, isize)>, Adj: AdjacentIterator
     {
         self.solver::<Codes>(thresh).try_satisfy::<Adj>()
     }
@@ -424,7 +439,7 @@ struct GeometrySolver<'a, Codes> {
     prevs: Vec<(isize, isize)>,
 }
 impl<'a, Codes> GeometrySolver<'a, Codes>
-where Codes: CodeSet
+where Codes: CodeSet<(isize, isize)>
 {
     fn is_old_interior_up_to<Adj: AdjacentIterator>(&mut self, row: isize) -> bool {
         self.codes.clear();
@@ -464,7 +479,7 @@ where Codes: CodeSet
     }
 }
 impl<Codes> Solver for GeometrySolver<'_, Codes>
-where Codes: CodeSet
+where Codes: CodeSet<(isize, isize)>
 {
     fn get_locating_code<Adj: AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
         let mut v = Vec::with_capacity(8);
@@ -626,7 +641,7 @@ impl GeometryTessellation {
         })
     }
     fn solver<Codes>(&mut self, thresh: f64) -> GeometrySolver<'_, Codes>
-    where Codes: CodeSet
+    where Codes: CodeSet<(isize, isize)>
     {
         assert!(thresh > 0.0 && thresh <= 1.0);
         self.old_set.clear();
@@ -651,7 +666,7 @@ impl Tessellation for GeometryTessellation {
         self.shape.len()
     }
     fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize>
-    where Codes: CodeSet, Adj: AdjacentIterator
+    where Codes: CodeSet<(isize, isize)>, Adj: AdjacentIterator
     {
         self.solver::<Codes>(thresh).try_satisfy::<Adj>()
     }
@@ -664,7 +679,9 @@ struct LowerBoundSearcher<Codes> {
     highest: f64,
     thresh: f64,
 }
-impl<Codes: CodeSet> LowerBoundSearcher<Codes> {
+impl<Codes> LowerBoundSearcher<Codes>
+where Codes: CodeSet<(isize, isize)>
+{
     fn to_index(&self, row: isize, col: isize) -> usize {
         row as usize * 5 + col as usize
     }
@@ -756,6 +773,153 @@ impl<Codes: CodeSet> LowerBoundSearcher<Codes> {
     }
 }
 
+struct FiniteGraphSolver<'a, Codes> {
+    verts: &'a [Vertex],
+    detectors: &'a mut HashSet<usize>,
+    needed: usize,
+    codes: Codes,
+}
+impl<Codes> FiniteGraphSolver<'_, Codes>
+where Codes: CodeSet<usize>
+{
+    fn get_locating_code(&self, p: usize) -> Vec<usize> {
+        let mut v = Vec::with_capacity(8);
+        for x in &self.verts[p].adj {
+            if self.detectors.contains(x) {
+                v.push(*x);
+            }
+        }
+        v
+    }
+    fn is_old(&mut self) -> bool {
+        self.codes.clear();
+        for i in 0..self.verts.len() {
+            let code = self.get_locating_code(i);
+            if !self.codes.add(code) {
+                return false;
+            }
+        }
+        true
+    }
+    fn find_solution_recursive(&mut self, pos: usize) -> bool {
+        if self.needed == self.detectors.len() {
+            if self.is_old() {
+                return true;
+            }
+        }
+        else if pos < self.verts.len() {
+            self.detectors.insert(pos);
+            if self.find_solution_recursive(pos + 1) {
+                return true;
+            }
+            self.detectors.remove(&pos);
+            return self.find_solution_recursive(pos + 1);
+        }
+
+        false
+    }
+    fn find_solution(&mut self, n: usize) -> bool {
+        self.detectors.clear();
+        self.needed = n;
+        self.find_solution_recursive(0)
+    }
+}
+
+enum GraphLoadError {
+    FileOpenFailure,
+    InvalidFormat(&'static str),
+}
+struct Vertex {
+    label: String,
+    adj: Vec<usize>,
+}
+struct FiniteGraph {
+    verts: Vec<Vertex>,
+    detectors: HashSet<usize>,
+}
+impl FiniteGraph {
+    fn with_shape<P: AsRef<Path>>(path: P) -> Result<Self, GraphLoadError> {
+        let mut f = BufReader::new(match File::open(path) {
+            Ok(x) => x,
+            Err(_) => return Err(GraphLoadError::FileOpenFailure),
+        });
+
+        struct Vertexish {
+            label: String,
+            adj: BTreeSet<usize>,
+        }
+        let mut v: Vec<Vertexish> = vec![];
+        let mut m: HashMap<String, usize> = Default::default();
+
+        let get_vert = |verts: &mut Vec<Vertexish>, map: &mut HashMap<String, usize>, a: &str| {
+            match map.get(a) {
+                Some(&p) => p,
+                None => {
+                    verts.push(Vertexish {
+                        label: a.into(),
+                        adj: Default::default(),
+                    });
+                    let p = verts.len() - 1;
+                    map.insert(a.into(), p);
+                    p
+                }
+            }
+        };
+        let mut add_edge = |a: &str, b: &str| {
+            let idx_a = get_vert(&mut v, &mut m, a);
+            let idx_b = get_vert(&mut v, &mut m, b);
+            v[idx_a].adj.insert(idx_b);
+            v[idx_b].adj.insert(idx_a);
+        };
+
+        let mut s = String::new();
+        while { s.clear(); let r = f.read_line(&mut s); r.is_ok() && r.unwrap() != 0 } {
+            for tok in s.split_whitespace() {
+                let p = match tok.find(':') {
+                    Some(x) => x,
+                    None => return Err(GraphLoadError::InvalidFormat("encountered token without a ':' separator")),
+                };
+                let a = &tok[..p].trim();
+                let b = &tok[p+1..].trim();
+                if b.find(':').is_some() {
+                    return Err(GraphLoadError::InvalidFormat("encoundered token with multiple ':' separators"));
+                }
+                if a == b {
+                    return Err(GraphLoadError::InvalidFormat("encountered reflexive connection"));
+                }
+                add_edge(a, b);
+            }
+        }
+
+        let mut verts: Vec<Vertex> = Vec::with_capacity(v.len());
+        for i in v {
+            verts.push(Vertex {
+                label: i.label,
+                adj: i.adj.into_iter().collect(),
+            });
+        }
+        Ok(FiniteGraph {
+            verts,
+            detectors: Default::default(),
+        })
+    }
+    fn solver<Codes>(&mut self) -> FiniteGraphSolver<'_, Codes>
+    where Codes: CodeSet<usize>
+    {
+        FiniteGraphSolver {
+            verts: &self.verts,
+            detectors: &mut self.detectors,
+            needed: 0,
+            codes: Default::default(),
+        }
+    }
+    fn get_solution(&self) -> Vec<&str> {
+        let mut v: Vec<&str> = self.detectors.iter().map(|&p| self.verts[p].label.as_str()).collect();
+        v.sort();
+        v
+    }
+}
+
 fn count_equal<T>(arr_1: &[T], arr_2: &[T]) -> usize
 where T: PartialOrd
 {
@@ -793,7 +957,7 @@ fn is_sorted<T: PartialOrd>(arr: &[T]) -> bool {
 
 #[test]
 fn test_det_set() {
-    let mut s: DETSet = Default::default();
+    let mut s: DETSet<(isize, isize)> = Default::default();
     
     assert!(s.is_empty());
     assert!(!s.add(vec![]));
@@ -894,7 +1058,7 @@ fn test_count_equal() {
 #[test]
 fn test_rect_pos() {
     let mut ggg = RectTessellation::new(4, 4);
-    let mut gg = ggg.solver::<OLDSet>(0.9);
+    let mut gg = ggg.solver::<OLDSet<(isize, isize)>>(0.9);
     let g = &mut gg.base;
 
     assert_eq!(g.id_to_inside(0, 0), 0);
@@ -963,24 +1127,24 @@ fn test_adjacent_tri_sorted() {
 }
 #[test]
 fn test_lower_bound_index() {
-    let v = LowerBoundSearcher::<OLDSet>::new();
+    let v = LowerBoundSearcher::<OLDSet<(isize, isize)>>::new();
     assert_eq!(v.to_index(0, 0), 0);
     assert_eq!(v.to_index(2, 1), 11);
 }
 
 fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
     let res = match mode {
-        "old:king" => tess.try_satisfy::<OLDSet, Adjacent8>(thresh),
-        "red:king" => tess.try_satisfy::<REDSet, Adjacent8>(thresh),
-        "det:king" => tess.try_satisfy::<DETSet, Adjacent8>(thresh),
+        "old:king" => tess.try_satisfy::<OLDSet<(isize, isize)>, Adjacent8>(thresh),
+        "red:king" => tess.try_satisfy::<REDSet<(isize, isize)>, Adjacent8>(thresh),
+        "det:king" => tess.try_satisfy::<DETSet<(isize, isize)>, Adjacent8>(thresh),
 
-        "old:tri" => tess.try_satisfy::<OLDSet, AdjacentTriangle>(thresh),
-        "red:tri" => tess.try_satisfy::<REDSet, AdjacentTriangle>(thresh),
-        "det:tri" => tess.try_satisfy::<DETSet, AdjacentTriangle>(thresh),
+        "old:tri" => tess.try_satisfy::<OLDSet<(isize, isize)>, AdjacentTriangle>(thresh),
+        "red:tri" => tess.try_satisfy::<REDSet<(isize, isize)>, AdjacentTriangle>(thresh),
+        "det:tri" => tess.try_satisfy::<DETSet<(isize, isize)>, AdjacentTriangle>(thresh),
 
-        "old:grid" => tess.try_satisfy::<OLDSet, Adjacent4>(thresh),
-        "red:grid" => tess.try_satisfy::<REDSet, Adjacent4>(thresh),
-        "det:grid" => tess.try_satisfy::<DETSet, Adjacent4>(thresh),
+        "old:grid" => tess.try_satisfy::<OLDSet<(isize, isize)>, Adjacent4>(thresh),
+        "red:grid" => tess.try_satisfy::<REDSet<(isize, isize)>, Adjacent4>(thresh),
+        "det:grid" => tess.try_satisfy::<DETSet<(isize, isize)>, Adjacent4>(thresh),
 
         _ => {
             eprintln!("unknown type: {}", mode);
@@ -998,17 +1162,17 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
 }
 fn theo_helper(mode: &str, thresh: f64) {
     let ((n, k), f) = match mode {
-        "old:king" => LowerBoundSearcher::<OLDSet>::new().calc::<Adjacent8>(thresh),
-        "red:king" => LowerBoundSearcher::<REDSet>::new().calc::<Adjacent8>(thresh),
-        "det:king" => LowerBoundSearcher::<DETSet>::new().calc::<Adjacent8>(thresh),
+        "old:king" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh),
+        "red:king" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh),
+        "det:king" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh),
 
-        "old:tri" => LowerBoundSearcher::<OLDSet>::new().calc::<AdjacentTriangle>(thresh),
-        "red:tri" => LowerBoundSearcher::<REDSet>::new().calc::<AdjacentTriangle>(thresh),
-        "det:tri" => LowerBoundSearcher::<DETSet>::new().calc::<AdjacentTriangle>(thresh),
+        "old:tri" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh),
+        "red:tri" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh),
+        "det:tri" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh),
 
-        "old:grid" => LowerBoundSearcher::<OLDSet>::new().calc::<Adjacent4>(thresh),
-        "red:grid" => LowerBoundSearcher::<REDSet>::new().calc::<Adjacent4>(thresh),
-        "det:grid" => LowerBoundSearcher::<DETSet>::new().calc::<Adjacent4>(thresh),
+        "old:grid" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh),
+        "red:grid" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh),
+        "det:grid" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh),
 
         _ => {
             eprintln!("unknown type: {}", mode);
@@ -1017,6 +1181,24 @@ fn theo_helper(mode: &str, thresh: f64) {
     };
 
     println!("found theo lower bound {}/{} ({})", n, k, f);
+}
+fn finite_helper(mut g: FiniteGraph, mode: &str, count: usize) {
+    let success = match mode {
+        "old" => g.solver::<OLDSet<usize>>().find_solution(count),
+        "red" => g.solver::<REDSet<usize>>().find_solution(count),
+        "det" => g.solver::<DETSet<usize>>().find_solution(count),
+
+        _ => {
+            eprintln!("unknown type: {}", mode);
+            std::process::exit(4);
+        }
+    };
+    if success {
+        println!("found solution:\n{:?}", g.get_solution());
+    }
+    else {
+        println!("no solution found");
+    }
 }
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -1041,6 +1223,37 @@ fn main() {
 
     if args.len() < 2 { show_usage(1); }
     match args[1].as_str() {
+        "finite" => {
+            if args.len() < 5 { show_usage(1); }
+            let g = match FiniteGraph::with_shape(&args[2]) {
+                Ok(g) => g,
+                Err(e) => {
+                    match e {
+                        GraphLoadError::FileOpenFailure => eprintln!("failed to open graph file {}", args[2]),
+                        GraphLoadError::InvalidFormat(msg) => eprintln!("file {} was invalid format: {}", args[2], msg),
+                    }
+                    std::process::exit(5);
+                }
+            };
+            let count = match args[4].parse::<usize>() {
+                Ok(n) => {
+                    if n == 0 {
+                        eprintln!("count cannot be zero");
+                        std::process::exit(6);
+                    }
+                    if n > g.verts.len() {
+                        eprintln!("count cannot be larger than graph size");
+                        std::process::exit(6);
+                    }
+                    n
+                }
+                Err(_) => {
+                    eprintln!("failed to parse '{}' as positive integer", args[4]);
+                    std::process::exit(7);
+                }
+            };
+            finite_helper(g, &args[3], count);
+        }
         "theo" => {
             if args.len() < 4 { show_usage(1); }
             let thresh = parse_thresh(&args[3]);
