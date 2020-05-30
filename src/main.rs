@@ -436,7 +436,6 @@ struct GeometrySolver<'a, Codes> {
 
     codes: Codes,
     needed: usize,
-    prevs: Vec<(isize, isize)>,
 }
 impl<'a, Codes> GeometrySolver<'a, Codes>
 where Codes: CodeSet<(isize, isize)>
@@ -455,7 +454,7 @@ where Codes: CodeSet<(isize, isize)>
     fn calc_old_min_interior<'b, Adj, P>(&mut self, mut pos: P) -> bool
     where Adj: AdjacentIterator, P: Iterator<Item = &'b (isize, isize)> + Clone
     {
-        if self.needed == self.prevs.len() {
+        if self.needed == self.old_set.len() {
             if self.is_old::<Adj>() {
                 return true;
             }
@@ -464,11 +463,9 @@ where Codes: CodeSet<(isize, isize)>
 
             if good_so_far {
                 self.old_set.insert(p);
-                self.prevs.push(p);
                 if self.calc_old_min_interior::<Adj, _>(pos.clone()) {
                     return true;
                 }
-                self.prevs.pop();
                 self.old_set.remove(&p);
 
                 return self.calc_old_min_interior::<Adj, _>(pos);
@@ -503,7 +500,6 @@ where Codes: CodeSet<(isize, isize)>
     }
     fn try_satisfy<Adj: AdjacentIterator>(&mut self) -> Option<usize> {
         self.old_set.clear();
-        self.prevs.clear();
         if self.calc_old_min_interior::<Adj, _>(self.shape.iter()) { Some(self.needed) } else { None }
     }
 }
@@ -657,7 +653,6 @@ impl GeometryTessellation {
 
             codes: Default::default(),
             needed,
-            prevs: Vec::with_capacity(needed),
         }
     }
 }
@@ -672,14 +667,16 @@ impl Tessellation for GeometryTessellation {
     }
 }
 
-struct LowerBoundSearcher<Codes> {
+type OverThreshHandler = dyn FnMut(&[bool], f64);
+struct LowerBoundSearcher<'a, Codes> {
     data: [bool; 25],
     iter_pos: Vec<usize>,
     codes: Codes,
     highest: f64,
     thresh: f64,
+    over_thresh_handler: Option<&'a mut OverThreshHandler>,
 }
-impl<Codes> LowerBoundSearcher<Codes>
+impl<'a, Codes> LowerBoundSearcher<'a, Codes>
 where Codes: CodeSet<(isize, isize)>
 {
     fn to_index(&self, row: isize, col: isize) -> usize {
@@ -721,6 +718,12 @@ where Codes: CodeSet<(isize, isize)>
         if pos >= self.iter_pos.len() {
             if self.is_valid::<Adj>() {
                 let share = self.calc_share::<Adj>(2, 2);
+                if share > self.thresh {
+                    match self.over_thresh_handler {
+                        Some(ref mut f) => f(&self.data, share),
+                        None => (),
+                    };
+                }
                 if self.highest < share {
                     self.highest = share;
                 }
@@ -734,7 +737,7 @@ where Codes: CodeSet<(isize, isize)>
             self.calc_recursive::<Adj>(pos + 1);
         }
     }
-    fn calc<Adj: AdjacentIterator>(&mut self, thresh: f64) -> ((usize, usize), f64) {
+    fn calc<Adj: AdjacentIterator>(&mut self, thresh: f64, over_thresh_handler: Option<&'a mut OverThreshHandler>) -> ((usize, usize), f64) {
         {
             // generate the iteration area - center extended twice, excluding center itself
             let area: BTreeSet<_> = Adj::new(2, 2).collect();
@@ -755,6 +758,7 @@ where Codes: CodeSet<(isize, isize)>
         // set current highest as zero and begin recursive search
         self.highest = 0.0;
         self.thresh = thresh;
+        self.over_thresh_handler = over_thresh_handler;
         self.calc_recursive::<Adj>(0);
 
         // lcm(1..=8) = 840, so multiply and divide by 840 to create an exact fractional representation
@@ -769,6 +773,7 @@ where Codes: CodeSet<(isize, isize)>
             codes: Default::default(),
             highest: 0.0,
             thresh: 0.0,
+            over_thresh_handler: None,
         }
     }
 }
@@ -1161,18 +1166,28 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
     }
 }
 fn theo_helper(mode: &str, thresh: f64) {
+    let mut handler =  move |data: &[bool], share: f64| {
+        println!("problem: {}", share);
+        for v in data.chunks(5) {
+            for &x in v {
+                print!("{} ", if x { 1 } else { 0 });
+            }
+            println!();
+        }
+        println!();
+    };
     let ((n, k), f) = match mode {
-        "old:king" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh),
-        "red:king" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh),
-        "det:king" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh),
+        "old:king" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
+        "red:king" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
+        "det:king" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
 
-        "old:tri" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh),
-        "red:tri" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh),
-        "det:tri" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh),
+        "old:tri" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
+        "red:tri" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
+        "det:tri" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
 
-        "old:grid" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh),
-        "red:grid" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh),
-        "det:grid" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh),
+        "old:grid" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
+        "red:grid" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
+        "det:grid" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
 
         _ => {
             eprintln!("unknown type: {}", mode);
@@ -1209,9 +1224,22 @@ fn main() {
             Ok(_) => {
                 eprintln!("thresh must be (0, 1]");
                 std::process::exit(6);
-            },
+            }
             Err(_) => {
                 eprintln!("failed to parse thresh as a floating point value");
+                std::process::exit(7);
+            }
+        }
+    };
+    let parse_share = |a: &str| {
+        match a.parse::<f64>() {
+            Ok(v) if v >= 1.0 => v,
+            Ok(_) => {
+                eprintln!("share must be [1, inf)");
+                std::process::exit(6);
+            }
+            Err(_) => {
+                eprintln!("failed to parse share as a floating point value");
                 std::process::exit(7);
             }
         }
@@ -1256,7 +1284,7 @@ fn main() {
         }
         "theo" => {
             if args.len() < 4 { show_usage(1); }
-            let thresh = parse_thresh(&args[3]);
+            let thresh = parse_share(&args[3]);
             theo_helper(&args[2], thresh);
         }
         "rect" => {
