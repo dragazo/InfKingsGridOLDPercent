@@ -124,7 +124,7 @@ impl ExactSizeIterator for AdjacentTriangle {}
 struct AdjacentHex {
     row: isize,
     col: isize,
-    state: u16,
+    state: usize,
 }
 impl AdjacentIterator for AdjacentHex {
     fn new(row: isize, col: isize) -> Self {
@@ -155,6 +155,36 @@ trait CodeSet<T>: Default {
     fn len(&self) -> usize;
     fn can_add(&self, code: &Vec<T>) -> bool;
     fn add(&mut self, code: Vec<T>) -> bool;
+}
+
+struct AdjacentTumblingBlock {
+    row: isize,
+    col: isize,
+    state: usize,
+}
+impl AdjacentIterator for AdjacentTumblingBlock {
+    fn new(row: isize, col: isize) -> Self {
+        Self {
+            row, col,
+            state: [0, 7, 11][modulus(row + col, 3)],
+        }
+    }
+}
+impl Iterator for AdjacentTumblingBlock {
+    type Item = (isize, isize);
+    fn next(&mut self) -> Option<Self::Item> {
+        let v = match self.state {
+            0 | 11 => (self.row - 1, self.col - 1),
+            1 | 7 => (self.row - 1, self.col),
+            2 | 8 => (self.row, self.col - 1),
+            3 | 12 => (self.row, self.col + 1),
+            4 | 13 => (self.row + 1, self.col),
+            5 | 9 => (self.row + 1, self.col + 1),
+            _ => return None,
+        };
+        self.state += 1;
+        Some(v)
+    }
 }
 
 #[derive(Default)]
@@ -188,9 +218,7 @@ where T: Ord + Default
 }
 
 #[derive(Default)]
-struct DETSet<T>
-where T: Ord + Default
-{
+struct DETSet<T> {
     codes: Vec<Vec<T>>,
 }
 impl<T> CodeSet<T> for DETSet<T>
@@ -225,9 +253,7 @@ where T: Ord + Default
 }
 
 #[derive(Default)]
-struct REDSet<T>
-where T: Ord + Default
-{
+struct REDSet<T> {
     codes: Vec<Vec<T>>,
 }
 impl<T> CodeSet<T> for REDSet<T>
@@ -247,6 +273,41 @@ where T: Ord + Default
         for other in &self.codes {
             let equal = count_equal(other, code);
             if other.len() + code.len() - 2 * equal < 2 {
+                return false;
+            }
+        }
+        true
+    }
+    fn add(&mut self, code: Vec<T>) -> bool {
+        if self.can_add(&code) {
+            self.codes.push(code);
+            true
+        }
+        else { false }
+    }
+}
+
+#[derive(Default)]
+struct ERRSet<T> {
+    codes: Vec<Vec<T>>,
+}
+impl<T> CodeSet<T> for ERRSet<T>
+where T: Ord + Default
+{
+    fn clear(&mut self) {
+        self.codes.clear();
+    }
+    fn is_empty(&self) -> bool {
+        self.codes.is_empty()
+    }
+    fn len(&self) -> usize {
+        self.codes.len()
+    }
+    fn can_add(&self, code: &Vec<T>) -> bool {
+        if code.len() < 3 { return false; }
+        for other in &self.codes {
+            let equal = count_equal(other, code);
+            if other.len() + code.len() - 2 * equal < 3 {
                 return false;
             }
         }
@@ -420,7 +481,7 @@ impl RectTessellation {
     fn solver<Codes>(&mut self, thresh: f64) -> RectSolver<'_, Codes>
     where Codes: CodeSet<(isize, isize)>
     {
-        let needed = (self.old_set.len() as f64 * thresh).ceil() as usize - 1;
+        let needed = (self.old_set.len() as f64 * thresh).floor() as usize;
         let (r, c) = (self.rows, self.cols);
         RectSolver::<Codes> {
             base: RectSolverBase::<Codes> {
@@ -670,7 +731,7 @@ impl GeometryTessellation {
         assert!(thresh > 0.0 && thresh <= 1.0);
         self.old_set.clear();
 
-        let needed = (self.size() as f64 * thresh).ceil() as usize - 1;
+        let needed = (self.size() as f64 * thresh).floor() as usize;
         GeometrySolver::<Codes> {
             shape: &self.shape,
             interior: &self.interior,
@@ -953,6 +1014,11 @@ impl FiniteGraph {
     }
 }
 
+fn modulus(a: isize, b: isize) -> usize {
+    assert!(b > 0);
+    let t = a % b;
+    if t >= 0 { t as usize } else { (t + b) as usize }
+}
 fn count_equal<T>(arr_1: &[T], arr_2: &[T]) -> usize
 where T: PartialOrd
 {
@@ -988,6 +1054,24 @@ fn is_sorted<T: PartialOrd>(arr: &[T]) -> bool {
     true
 }
 
+#[test]
+fn modulus_test() {
+    assert_eq!(modulus(-7, 5), 3);
+    assert_eq!(modulus(-6, 5), 4);
+    assert_eq!(modulus(-5, 5), 0);
+    assert_eq!(modulus(-4, 5), 1);
+    assert_eq!(modulus(-3, 5), 2);
+    assert_eq!(modulus(-2, 5), 3);
+    assert_eq!(modulus(-1, 5), 4);
+    assert_eq!(modulus(0, 5), 0);
+    assert_eq!(modulus(1, 5), 1);
+    assert_eq!(modulus(2, 5), 2);
+    assert_eq!(modulus(3, 5), 3);
+    assert_eq!(modulus(4, 5), 4);
+    assert_eq!(modulus(5, 5), 0);
+    assert_eq!(modulus(6, 5), 1);
+    assert_eq!(modulus(7, 5), 2);
+}
 #[test]
 fn test_det_set() {
     let mut s: DETSet<(isize, isize)> = Default::default();
@@ -1204,6 +1288,97 @@ fn test_hex_pos() {
     }
 }
 #[test]
+fn test_tmb_pos() {
+    let mut p = AdjacentTumblingBlock::new(0, 0);
+    assert_eq!(p.next(), Some((-1, -1)));
+    assert_eq!(p.next(), Some((-1, 0)));
+    assert_eq!(p.next(), Some((0, -1)));
+    assert_eq!(p.next(), Some((0, 1)));
+    assert_eq!(p.next(), Some((1, 0)));
+    assert_eq!(p.next(), Some((1, 1)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+
+    p = AdjacentTumblingBlock::new(0, 1);
+    assert_eq!(p.next(), Some((-1, 1)));
+    assert_eq!(p.next(), Some((0, 0)));
+    assert_eq!(p.next(), Some((1, 2)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+
+    p = AdjacentTumblingBlock::new(0, 2);
+    assert_eq!(p.next(), Some((-1, 1)));
+    assert_eq!(p.next(), Some((0, 3)));
+    assert_eq!(p.next(), Some((1, 2)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+
+    p = AdjacentTumblingBlock::new(-1, -2);
+    assert_eq!(p.next(), Some((-2, -3)));
+    assert_eq!(p.next(), Some((-2, -2)));
+    assert_eq!(p.next(), Some((-1, -3)));
+    assert_eq!(p.next(), Some((-1, -1)));
+    assert_eq!(p.next(), Some((0, -2)));
+    assert_eq!(p.next(), Some((0, -1)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+
+    p = AdjacentTumblingBlock::new(1, 3);
+    assert_eq!(p.next(), Some((0, 3)));
+    assert_eq!(p.next(), Some((1, 2)));
+    assert_eq!(p.next(), Some((2, 4)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+
+    p = AdjacentTumblingBlock::new(3, 2);
+    assert_eq!(p.next(), Some((2, 1)));
+    assert_eq!(p.next(), Some((3, 3)));
+    assert_eq!(p.next(), Some((4, 2)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+
+    p = AdjacentTumblingBlock::new(-2, -2);
+    assert_eq!(p.next(), Some((-3, -3)));
+    assert_eq!(p.next(), Some((-2, -1)));
+    assert_eq!(p.next(), Some((-1, -2)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+
+    p = AdjacentTumblingBlock::new(-2, -3);
+    assert_eq!(p.next(), Some((-3, -3)));
+    assert_eq!(p.next(), Some((-2, -4)));
+    assert_eq!(p.next(), Some((-1, -2)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+
+    p = AdjacentTumblingBlock::new(-2, 2);
+    assert_eq!(p.next(), Some((-3, 1)));
+    assert_eq!(p.next(), Some((-3, 2)));
+    assert_eq!(p.next(), Some((-2, 1)));
+    assert_eq!(p.next(), Some((-2, 3)));
+    assert_eq!(p.next(), Some((-1, 2)));
+    assert_eq!(p.next(), Some((-1, 3)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+
+    p = AdjacentTumblingBlock::new(1, -2);
+    assert_eq!(p.next(), Some((0, -3)));
+    assert_eq!(p.next(), Some((1, -1)));
+    assert_eq!(p.next(), Some((2, -2)));
+    for _ in 0..10 {
+        assert_eq!(p.next(), None);
+    }
+}
+#[test]
 fn test_adjacent4_sorted() {
     for &(r, c) in &[(0, 0), (4, 2), (-1, 2), (-18, -4), (1, -7)] {
         let v: Vec<_> = Adjacent4::new(r, c).collect();
@@ -1227,7 +1402,14 @@ fn test_adjacent_tri_sorted() {
 #[test]
 fn test_adjacent_hex_sorted() {
     for &(r, c) in &[(0, 0), (4, 2), (-1, 2), (-18, -4), (1, -7)] {
-        let v: Vec<_> = AdjacentTriangle::new(r, c).collect();
+        let v: Vec<_> = AdjacentHex::new(r, c).collect();
+        assert!(is_sorted(&v));
+    }
+}
+#[test]
+fn test_adjacent_tmb_sorted() {
+    for &(r, c) in &[(0, 0), (0, 1), (0, 2), (4, 2), (-1, 2), (-18, -4), (1, -7)] {
+        let v: Vec<_> = AdjacentTumblingBlock::new(r, c).collect();
         assert!(is_sorted(&v));
     }
 }
@@ -1243,18 +1425,27 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
         "old:king" => tess.try_satisfy::<OLDSet<(isize, isize)>, Adjacent8>(thresh),
         "red:king" => tess.try_satisfy::<REDSet<(isize, isize)>, Adjacent8>(thresh),
         "det:king" => tess.try_satisfy::<DETSet<(isize, isize)>, Adjacent8>(thresh),
+        "err:king" => tess.try_satisfy::<ERRSet<(isize, isize)>, Adjacent8>(thresh),
 
         "old:tri" => tess.try_satisfy::<OLDSet<(isize, isize)>, AdjacentTriangle>(thresh),
         "red:tri" => tess.try_satisfy::<REDSet<(isize, isize)>, AdjacentTriangle>(thresh),
         "det:tri" => tess.try_satisfy::<DETSet<(isize, isize)>, AdjacentTriangle>(thresh),
+        "err:tri" => tess.try_satisfy::<ERRSet<(isize, isize)>, AdjacentTriangle>(thresh),
 
         "old:grid" => tess.try_satisfy::<OLDSet<(isize, isize)>, Adjacent4>(thresh),
         "red:grid" => tess.try_satisfy::<REDSet<(isize, isize)>, Adjacent4>(thresh),
         "det:grid" => tess.try_satisfy::<DETSet<(isize, isize)>, Adjacent4>(thresh),
+        "err:grid" => tess.try_satisfy::<ERRSet<(isize, isize)>, Adjacent4>(thresh),
 
         "old:hex" => tess.try_satisfy::<OLDSet<(isize, isize)>, AdjacentHex>(thresh),
         "red:hex" => tess.try_satisfy::<REDSet<(isize, isize)>, AdjacentHex>(thresh),
         "det:hex" => tess.try_satisfy::<DETSet<(isize, isize)>, AdjacentHex>(thresh),
+        "err:hex" => tess.try_satisfy::<ERRSet<(isize, isize)>, AdjacentHex>(thresh),
+
+        "old:tmb" => tess.try_satisfy::<OLDSet<(isize, isize)>, AdjacentTumblingBlock>(thresh),
+        "red:tmb" => tess.try_satisfy::<REDSet<(isize, isize)>, AdjacentTumblingBlock>(thresh),
+        "det:tmb" => tess.try_satisfy::<DETSet<(isize, isize)>, AdjacentTumblingBlock>(thresh),
+        "err:tmb" => tess.try_satisfy::<ERRSet<(isize, isize)>, AdjacentTumblingBlock>(thresh),
 
         _ => {
             eprintln!("unknown type: {}", mode);
@@ -1267,7 +1458,7 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
             let d = gcd(min, n);
             println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), tess);
         },
-        None => println!("no solution found under thresh {}", thresh),
+        None => println!("no solution found within thresh {}", thresh),
     }
 }
 fn theo_helper(mode: &str, thresh: f64) {
@@ -1285,18 +1476,22 @@ fn theo_helper(mode: &str, thresh: f64) {
         "old:king" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
         "red:king" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
         "det:king" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
+        "err:king" => LowerBoundSearcher::<ERRSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
 
         "old:tri" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
         "red:tri" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
         "det:tri" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
+        "err:tri" => LowerBoundSearcher::<ERRSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
 
         "old:grid" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
         "red:grid" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
         "det:grid" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
+        "err:grid" => LowerBoundSearcher::<ERRSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
 
         "old:hex" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<AdjacentHex>(thresh, Some(&mut handler)),
         "red:hex" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<AdjacentHex>(thresh, Some(&mut handler)),
         "det:hex" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<AdjacentHex>(thresh, Some(&mut handler)),
+        "err:hex" => LowerBoundSearcher::<ERRSet<(isize, isize)>>::new().calc::<AdjacentHex>(thresh, Some(&mut handler)),
 
         _ => {
             eprintln!("unknown type: {}", mode);
