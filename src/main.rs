@@ -3,329 +3,17 @@ use std::fmt;
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 use std::path::Path;
-//use rand::Rng;
 
-// additionally required to iterate in lexicographic sorted order and not have duplicates (see unit tests below)
-trait AdjacentIterator: Iterator<Item = (isize, isize)> {
-    fn new(row: isize, col: isize) -> Self;
-}
+mod util;
+mod adj;
+mod codesets;
 
-struct Adjacent8 {
-    row: isize,
-    col: isize,
-    state: usize,
-}
-impl AdjacentIterator for Adjacent8 {
-    fn new(row: isize, col: isize) -> Self {
-        Self { row, col, state: 0 }
-    }
-}
-impl Iterator for Adjacent8 {
-    type Item = (isize, isize);
-    fn next(&mut self) -> Option<Self::Item> {
-        let r = self.row;
-        let c = self.col;
-
-        let v = match self.state {
-            0 => (r - 1, c - 1),
-            1 => (r - 1, c),
-            2 => (r - 1, c + 1),
-
-            3 => (r, c - 1),
-            4 => (r, c + 1),
-
-            5 => (r + 1, c - 1),
-            6 => (r + 1, c),
-            7 => (r + 1, c + 1),
-
-            _ => return None,
-        };
-        self.state += 1;
-        Some(v)
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let v = 8 - self.state;
-        (v, Some(v))
-    }
-}
-impl ExactSizeIterator for Adjacent8 {}
-
-struct Adjacent4 {
-    row: isize,
-    col: isize,
-    state: usize,
-}
-impl AdjacentIterator for Adjacent4 {
-    fn new(row: isize, col: isize) -> Self {
-        Self { row, col, state: 0 }
-    }
-}
-impl Iterator for Adjacent4 {
-    type Item = (isize, isize);
-    fn next(&mut self) -> Option<Self::Item> {
-        let r = self.row;
-        let c = self.col;
-
-        let v = match self.state {
-            0 => (r - 1, c),
-            1 => (r, c - 1),
-            2 => (r, c + 1),
-            3 => (r + 1, c),
-            _ => return None,
-        };
-        self.state += 1;
-        Some(v)
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let v = 4 - self.state;
-        (v, Some(v))
-    }
-}
-impl ExactSizeIterator for Adjacent4 {}
-
-struct AdjacentTriangle {
-    row: isize,
-    col: isize,
-    state: usize,
-}
-impl AdjacentIterator for AdjacentTriangle {
-    fn new(row: isize, col: isize) -> Self {
-        Self { row, col, state: 0 }
-    }
-}
-impl Iterator for AdjacentTriangle {
-    type Item = (isize, isize);
-    fn next(&mut self) -> Option<Self::Item> {
-        let r = self.row;
-        let c = self.col;
-
-        let v = match self.state {
-            0 => (r - 1, c - 1),
-            1 => (r - 1, c),
-
-            2 => (r, c - 1),
-            3 => (r, c + 1),
-
-            4 => (r + 1, c),
-            5 => (r + 1, c + 1),
-
-            _ => return None,
-        };
-        self.state += 1;
-        Some(v)
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let v = 6 - self.state;
-        (v, Some(v))
-    }
-}
-impl ExactSizeIterator for AdjacentTriangle {}
-
-struct AdjacentHex {
-    row: isize,
-    col: isize,
-    state: usize,
-}
-impl AdjacentIterator for AdjacentHex {
-    fn new(row: isize, col: isize) -> Self {
-        Self {
-            row, col,
-            state: if (row + col) % 2 == 0 { 0 } else { 4 },
-        }
-    }
-}
-impl Iterator for AdjacentHex {
-    type Item = (isize, isize);
-    fn next(&mut self) -> Option<Self::Item> {
-        let v = match self.state {
-            0 => (self.row - 1, self.col),
-            6 => (self.row + 1, self.col),
-            1 | 4 => (self.row, self.col - 1),
-            2 | 5 => (self.row, self.col + 1),
-            _ => return None,
-        };
-        self.state += 1;
-        Some(v)
-    }
-}
-
-trait CodeSet<T>: Default {
-    fn clear(&mut self);
-    fn is_empty(&self) -> bool;
-    fn len(&self) -> usize;
-    fn can_add(&self, code: &Vec<T>) -> bool;
-    fn add(&mut self, code: Vec<T>) -> bool;
-}
-
-struct AdjacentTumblingBlock {
-    row: isize,
-    col: isize,
-    state: usize,
-}
-impl AdjacentIterator for AdjacentTumblingBlock {
-    fn new(row: isize, col: isize) -> Self {
-        Self {
-            row, col,
-            state: [0, 7, 11][modulus(row + col, 3)],
-        }
-    }
-}
-impl Iterator for AdjacentTumblingBlock {
-    type Item = (isize, isize);
-    fn next(&mut self) -> Option<Self::Item> {
-        let v = match self.state {
-            0 | 11 => (self.row - 1, self.col - 1),
-            1 | 7 => (self.row - 1, self.col),
-            2 | 8 => (self.row, self.col - 1),
-            3 | 12 => (self.row, self.col + 1),
-            4 | 13 => (self.row + 1, self.col),
-            5 | 9 => (self.row + 1, self.col + 1),
-            _ => return None,
-        };
-        self.state += 1;
-        Some(v)
-    }
-}
-
-#[derive(Default)]
-struct OLDSet<T>
-where T: Ord + Default
-{
-    codes: BTreeSet<Vec<T>>,
-}
-impl<T> CodeSet<T> for OLDSet<T>
-where T: Ord + Default
-{
-    fn clear(&mut self) {
-        self.codes.clear();
-    }
-    fn is_empty(&self) -> bool {
-        self.codes.is_empty()
-    }
-    fn len(&self) -> usize {
-        self.codes.len()
-    }
-    fn can_add(&self, code: &Vec<T>) -> bool {
-        !code.is_empty() && !self.codes.contains(code)
-    }
-    fn add(&mut self, code: Vec<T>) -> bool {
-        if self.can_add(&code) {
-            self.codes.insert(code);
-            true
-        }
-        else { false }
-    }
-}
-
-#[derive(Default)]
-struct DETSet<T> {
-    codes: Vec<Vec<T>>,
-}
-impl<T> CodeSet<T> for DETSet<T>
-where T: Ord + Default
-{
-    fn clear(&mut self) {
-        self.codes.clear();
-    }
-    fn is_empty(&self) -> bool {
-        self.codes.is_empty()
-    }
-    fn len(&self) -> usize {
-        self.codes.len()
-    }
-    fn can_add(&self, code: &Vec<T>) -> bool {
-        if code.len() < 2 { return false; }
-        for other in &self.codes {
-            let equal = count_equal(other, code);
-            if equal + 2 > other.len() && equal + 2 > code.len() {
-                return false;
-            }
-        }
-        true
-    }
-    fn add(&mut self, code: Vec<T>) -> bool {
-        if self.can_add(&code) {
-            self.codes.push(code);
-            true
-        }
-        else { false }
-    }
-}
-
-#[derive(Default)]
-struct REDSet<T> {
-    codes: Vec<Vec<T>>,
-}
-impl<T> CodeSet<T> for REDSet<T>
-where T: Ord + Default
-{
-    fn clear(&mut self) {
-        self.codes.clear();
-    }
-    fn is_empty(&self) -> bool {
-        self.codes.is_empty()
-    }
-    fn len(&self) -> usize {
-        self.codes.len()
-    }
-    fn can_add(&self, code: &Vec<T>) -> bool {
-        if code.len() < 2 { return false; }
-        for other in &self.codes {
-            let equal = count_equal(other, code);
-            if other.len() + code.len() - 2 * equal < 2 {
-                return false;
-            }
-        }
-        true
-    }
-    fn add(&mut self, code: Vec<T>) -> bool {
-        if self.can_add(&code) {
-            self.codes.push(code);
-            true
-        }
-        else { false }
-    }
-}
-
-#[derive(Default)]
-struct ERRSet<T> {
-    codes: Vec<Vec<T>>,
-}
-impl<T> CodeSet<T> for ERRSet<T>
-where T: Ord + Default
-{
-    fn clear(&mut self) {
-        self.codes.clear();
-    }
-    fn is_empty(&self) -> bool {
-        self.codes.is_empty()
-    }
-    fn len(&self) -> usize {
-        self.codes.len()
-    }
-    fn can_add(&self, code: &Vec<T>) -> bool {
-        if code.len() < 3 { return false; }
-        for other in &self.codes {
-            let equal = count_equal(other, code);
-            if other.len() + code.len() - 2 * equal < 3 {
-                return false;
-            }
-        }
-        true
-    }
-    fn add(&mut self, code: Vec<T>) -> bool {
-        if self.can_add(&code) {
-            self.codes.push(code);
-            true
-        }
-        else { false }
-    }
-}
+use adj::AdjacentIterator;
 
 trait Solver {
-    fn get_locating_code<Adj>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> where Adj: AdjacentIterator;
-    fn is_old<Adj>(&mut self) -> bool where Adj: AdjacentIterator;
-    fn try_satisfy<Adj>(&mut self) -> Option<usize> where Adj: AdjacentIterator;
+    fn get_locating_code<Adj>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> where Adj: adj::AdjacentIterator;
+    fn is_old<Adj>(&mut self) -> bool where Adj: adj::AdjacentIterator;
+    fn try_satisfy<Adj>(&mut self) -> Option<usize> where Adj: adj::AdjacentIterator;
 }
 
 struct RectSolverBase<'a, Codes> {
@@ -339,7 +27,7 @@ struct RectSolver<'a, Codes> {
     base: RectSolverBase<'a, Codes>,
     phases: Vec<(isize, isize)>,
 }
-impl<Codes> RectSolverBase<'_, Codes> where Codes: CodeSet<(isize, isize)> {
+impl<Codes> RectSolverBase<'_, Codes> where Codes: codesets::Set<(isize, isize)> {
     fn id_to_inside(&self, row: isize, col: isize) -> usize {
         let col_fix = if row < 0 { col - self.src.phase.0 } else if row >= self.src.rows as isize { col + self.src.phase.0 } else { col };
         let row_fix = if col < 0 { row - self.src.phase.1 } else if col >= self.src.cols as isize { row + self.src.phase.1 } else { row };
@@ -348,7 +36,7 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: CodeSet<(isize, isize)> {
         let c = (col_fix + 2 * self.src.cols as isize) as usize % self.src.cols;
         r * self.src.cols + c
     }
-    fn get_locating_code<Adj: AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
+    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
         let mut v = Vec::with_capacity(8);
         for x in Adj::new(pos.0, pos.1) {
             if self.src.old_set[self.id_to_inside(x.0, x.1)] {
@@ -357,7 +45,7 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: CodeSet<(isize, isize)> {
         }
         v
     }
-    fn is_old_interior_up_to<Adj: AdjacentIterator>(&mut self, row: isize) -> bool {
+    fn is_old_interior_up_to<Adj: adj::AdjacentIterator>(&mut self, row: isize) -> bool {
         self.interior_codes.clear();
         for r in 1..row - 1 {
             for c in 1..self.src.cols as isize - 1 {
@@ -369,7 +57,7 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: CodeSet<(isize, isize)> {
         }
         true
     }
-    fn is_old_with_current_phase<Adj: AdjacentIterator>(&mut self) -> bool {
+    fn is_old_with_current_phase<Adj: adj::AdjacentIterator>(&mut self) -> bool {
         self.codes.clear();
         for &r in &[-1, 0, self.src.rows as isize - 1, self.src.rows as isize] {
             for c in -1 ..= self.src.cols as isize {
@@ -391,9 +79,9 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: CodeSet<(isize, isize)> {
     }
 }
 impl<Codes> RectSolver<'_, Codes>
-where Codes: CodeSet<(isize, isize)>
+where Codes: codesets::Set<(isize, isize)>
 {
-    fn calc_old_min_interior<Adj: AdjacentIterator>(&mut self, pos: usize) -> bool {
+    fn calc_old_min_interior<Adj: adj::AdjacentIterator>(&mut self, pos: usize) -> bool {
         if self.base.needed == self.base.prevs.len() {
             if self.is_old::<Adj>() {
                 return true;
@@ -420,12 +108,12 @@ where Codes: CodeSet<(isize, isize)>
     }
 }
 impl<Codes> Solver for RectSolver<'_, Codes>
-where Codes: CodeSet<(isize, isize)>
+where Codes: codesets::Set<(isize, isize)>
 {
-    fn get_locating_code<Adj: AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
+    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
         self.base.get_locating_code::<Adj>(pos)
     }
-    fn is_old<Adj: AdjacentIterator>(&mut self) -> bool {
+    fn is_old<Adj: adj::AdjacentIterator>(&mut self) -> bool {
         if self.base.is_old_interior_up_to::<Adj>(self.base.src.rows as isize) {
             for phase in &self.phases {
                 self.base.src.phase = *phase;
@@ -436,7 +124,7 @@ where Codes: CodeSet<(isize, isize)>
         }
         false
     }
-    fn try_satisfy<Adj: AdjacentIterator>(&mut self) -> Option<usize> {
+    fn try_satisfy<Adj: adj::AdjacentIterator>(&mut self) -> Option<usize> {
         for x in &mut self.base.src.old_set { *x = false; }
         self.base.prevs.clear();
         if self.calc_old_min_interior::<Adj>(0) { Some(self.base.needed) } else { None }
@@ -446,7 +134,7 @@ where Codes: CodeSet<(isize, isize)>
 trait Tessellation: fmt::Display {
     fn size(&self) -> usize;
     fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize>
-    where Codes: CodeSet<(isize, isize)>, Adj: AdjacentIterator;
+    where Codes: codesets::Set<(isize, isize)>, Adj: adj::AdjacentIterator;
 }
 
 struct RectTessellation {
@@ -479,7 +167,7 @@ impl RectTessellation {
         }
     }
     fn solver<Codes>(&mut self, thresh: f64) -> RectSolver<'_, Codes>
-    where Codes: CodeSet<(isize, isize)>
+    where Codes: codesets::Set<(isize, isize)>
     {
         let needed = (self.old_set.len() as f64 * thresh).floor() as usize;
         let (r, c) = (self.rows, self.cols);
@@ -504,7 +192,7 @@ impl Tessellation for RectTessellation {
         self.old_set.len()
     }
     fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize>
-    where Codes: CodeSet<(isize, isize)>, Adj: AdjacentIterator
+    where Codes: codesets::Set<(isize, isize)>, Adj: adj::AdjacentIterator
     {
         self.solver::<Codes>(thresh).try_satisfy::<Adj>()
     }
@@ -527,9 +215,9 @@ struct GeometrySolver<'a, Codes> {
     needed: usize,
 }
 impl<'a, Codes> GeometrySolver<'a, Codes>
-where Codes: CodeSet<(isize, isize)>
+where Codes: codesets::Set<(isize, isize)>
 {
-    fn is_old_interior_up_to<Adj: AdjacentIterator>(&mut self, row: isize) -> bool {
+    fn is_old_interior_up_to<Adj: adj::AdjacentIterator>(&mut self, row: isize) -> bool {
         self.codes.clear();
         for p in self.interior {
             if p.0 >= row - 1 { break; }
@@ -541,7 +229,7 @@ where Codes: CodeSet<(isize, isize)>
         true
     }
     fn calc_old_min_interior<'b, Adj, P>(&mut self, mut pos: P) -> bool
-    where Adj: AdjacentIterator, P: Iterator<Item = &'b (isize, isize)> + Clone
+    where Adj: adj::AdjacentIterator, P: Iterator<Item = &'b (isize, isize)> + Clone
     {
         if self.needed == self.old_set.len() {
             if self.is_old::<Adj>() {
@@ -565,9 +253,9 @@ where Codes: CodeSet<(isize, isize)>
     }
 }
 impl<Codes> Solver for GeometrySolver<'_, Codes>
-where Codes: CodeSet<(isize, isize)>
+where Codes: codesets::Set<(isize, isize)>
 {
-    fn get_locating_code<Adj: AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
+    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
         let mut v = Vec::with_capacity(8);
         for x in Adj::new(pos.0, pos.1) {
             let mapped = self.tessellation_map.get(&x).unwrap();
@@ -577,7 +265,7 @@ where Codes: CodeSet<(isize, isize)>
         }
         v
     }
-    fn is_old<Adj: AdjacentIterator>(&mut self) -> bool {
+    fn is_old<Adj: adj::AdjacentIterator>(&mut self) -> bool {
         self.codes.clear();
         for pos in self.shape_with_padding {
             let code = self.get_locating_code::<Adj>(*pos);
@@ -587,7 +275,7 @@ where Codes: CodeSet<(isize, isize)>
         }
         true
     }
-    fn try_satisfy<Adj: AdjacentIterator>(&mut self) -> Option<usize> {
+    fn try_satisfy<Adj: adj::AdjacentIterator>(&mut self) -> Option<usize> {
         self.old_set.clear();
         if self.calc_old_min_interior::<Adj, _>(self.shape.iter()) { Some(self.needed) } else { None }
     }
@@ -667,7 +355,7 @@ impl GeometryTessellation {
             shape
         };
         let interior = {
-            let boundary: BTreeSet<_> = shape.iter().filter(|x| Adjacent8::new(x.0, x.1).any(|y| !shape.contains(&y))).cloned().collect();
+            let boundary: BTreeSet<_> = shape.iter().filter(|x| adj::OpenKing::new(x.0, x.1).any(|y| !shape.contains(&y))).cloned().collect();
             &shape - &boundary
         };
         let first_per_row = {
@@ -684,12 +372,12 @@ impl GeometryTessellation {
 
         let shape_with_padding: BTreeSet<_> = {
             let mut t = shape.clone();
-            t.extend(shape.iter().flat_map(|x| Adjacent8::new(x.0, x.1)));
+            t.extend(shape.iter().flat_map(|x| adj::OpenKing::new(x.0, x.1)));
             t
         };
         let shape_with_extra_padding: BTreeSet<_> = {
             let mut t = shape_with_padding.clone();
-            t.extend(shape_with_padding.iter().flat_map(|x| Adjacent8::new(x.0, x.1)));
+            t.extend(shape_with_padding.iter().flat_map(|x| adj::OpenKing::new(x.0, x.1)));
             t
         };
 
@@ -726,7 +414,7 @@ impl GeometryTessellation {
         })
     }
     fn solver<Codes>(&mut self, thresh: f64) -> GeometrySolver<'_, Codes>
-    where Codes: CodeSet<(isize, isize)>
+    where Codes: codesets::Set<(isize, isize)>
     {
         assert!(thresh > 0.0 && thresh <= 1.0);
         self.old_set.clear();
@@ -750,7 +438,7 @@ impl Tessellation for GeometryTessellation {
         self.shape.len()
     }
     fn try_satisfy<Codes, Adj>(&mut self, thresh: f64) -> Option<usize>
-    where Codes: CodeSet<(isize, isize)>, Adj: AdjacentIterator
+    where Codes: codesets::Set<(isize, isize)>, Adj: adj::AdjacentIterator
     {
         self.solver::<Codes>(thresh).try_satisfy::<Adj>()
     }
@@ -766,12 +454,12 @@ struct LowerBoundSearcher<'a, Codes> {
     over_thresh_handler: Option<&'a mut OverThreshHandler>,
 }
 impl<'a, Codes> LowerBoundSearcher<'a, Codes>
-where Codes: CodeSet<(isize, isize)>
+where Codes: codesets::Set<(isize, isize)>
 {
     fn to_index(&self, row: isize, col: isize) -> usize {
         row as usize * 5 + col as usize
     }
-    fn get_locating_code<Adj: AdjacentIterator>(&self, row: isize, col: isize) -> Vec<(isize, isize)> {
+    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, row: isize, col: isize) -> Vec<(isize, isize)> {
         let mut v = Vec::with_capacity(8);
         for p in Adj::new(row, col) {
             if self.data[self.to_index(p.0, p.1)] {
@@ -780,10 +468,10 @@ where Codes: CodeSet<(isize, isize)>
         }
         v
     }
-    fn get_locating_code_size<Adj: AdjacentIterator>(&self, row: isize, col: isize) -> usize {
+    fn get_locating_code_size<Adj: adj::AdjacentIterator>(&self, row: isize, col: isize) -> usize {
         Adj::new(row, col).filter(|p| self.data[self.to_index(p.0, p.1)]).count()
     }
-    fn is_valid<Adj: AdjacentIterator>(&mut self) -> bool {
+    fn is_valid<Adj: adj::AdjacentIterator>(&mut self) -> bool {
         self.codes.clear();
         for p in std::iter::once((2, 2)).chain(Adj::new(2, 2)) {
             let code = self.get_locating_code::<Adj>(p.0, p.1);
@@ -793,7 +481,7 @@ where Codes: CodeSet<(isize, isize)>
         }
         true
     }
-    fn calc_share<Adj: AdjacentIterator>(&self, row: isize, col: isize) -> f64 {
+    fn calc_share<Adj: adj::AdjacentIterator>(&self, row: isize, col: isize) -> f64 {
         assert!(self.data[self.to_index(row, col)]);
 
         let mut share = 0.0;
@@ -803,7 +491,7 @@ where Codes: CodeSet<(isize, isize)>
         }
         share
     }
-    fn calc_recursive<Adj: AdjacentIterator>(&mut self, pos: usize) {
+    fn calc_recursive<Adj: adj::AdjacentIterator>(&mut self, pos: usize) {
         if pos >= self.iter_pos.len() {
             if self.is_valid::<Adj>() {
                 let share = self.calc_share::<Adj>(2, 2);
@@ -826,7 +514,7 @@ where Codes: CodeSet<(isize, isize)>
             self.calc_recursive::<Adj>(pos + 1);
         }
     }
-    fn calc<Adj: AdjacentIterator>(&mut self, thresh: f64, over_thresh_handler: Option<&'a mut OverThreshHandler>) -> ((usize, usize), f64) {
+    fn calc<Adj: adj::AdjacentIterator>(&mut self, thresh: f64, over_thresh_handler: Option<&'a mut OverThreshHandler>) -> ((usize, usize), f64) {
         {
             // generate the iteration area - center extended twice, excluding center itself
             let area: BTreeSet<_> = Adj::new(2, 2).collect();
@@ -852,7 +540,7 @@ where Codes: CodeSet<(isize, isize)>
 
         // lcm(1..=8) = 840, so multiply and divide by 840 to create an exact fractional representation
         let v = (self.highest * 840.0).round() as usize;
-        let d = gcd(v, 840);
+        let d = util::gcd(v, 840);
         ((840 / d, v / d), 1.0 / self.highest)
     }
     fn new() -> Self {
@@ -874,7 +562,7 @@ struct FiniteGraphSolver<'a, Codes> {
     codes: Codes,
 }
 impl<Codes> FiniteGraphSolver<'_, Codes>
-where Codes: CodeSet<usize>
+where Codes: codesets::Set<usize>
 {
     fn get_locating_code(&self, p: usize) -> Vec<usize> {
         let mut v = Vec::with_capacity(8);
@@ -998,7 +686,7 @@ impl FiniteGraph {
         })
     }
     fn solver<Codes>(&mut self) -> FiniteGraphSolver<'_, Codes>
-    where Codes: CodeSet<usize>
+    where Codes: codesets::Set<usize>
     {
         FiniteGraphSolver {
             verts: &self.verts,
@@ -1014,168 +702,10 @@ impl FiniteGraph {
     }
 }
 
-fn modulus(a: isize, b: isize) -> usize {
-    assert!(b > 0);
-    let t = a % b;
-    if t >= 0 { t as usize } else { (t + b) as usize }
-}
-fn count_equal<T>(arr_1: &[T], arr_2: &[T]) -> usize
-where T: PartialOrd
-{
-    let mut pos = 0;
-    let mut count = 0;
-
-    for val in arr_1 {
-        while pos < arr_2.len() && val > &arr_2[pos] { pos += 1; }
-        if pos >= arr_2.len() { break; }
-        if val == &arr_2[pos] { count += 1; }
-    }
-
-    count
-}
-// source: https://doc.rust-lang.org/std/ops/trait.Div.html
-fn gcd(mut x: usize, mut y: usize) -> usize {
-    while y != 0 {
-        let t = y;
-        y = x % y;
-        x = t;
-    }
-    x
-}
-
-// Vec::is_sorted is nightly-only, so use this workaround
-#[cfg(test)]
-fn is_sorted<T: PartialOrd>(arr: &[T]) -> bool {
-    for w in arr.windows(2) {
-        if w[0] > w[1] {
-            return false;
-        }
-    }
-    true
-}
-
-#[test]
-fn modulus_test() {
-    assert_eq!(modulus(-7, 5), 3);
-    assert_eq!(modulus(-6, 5), 4);
-    assert_eq!(modulus(-5, 5), 0);
-    assert_eq!(modulus(-4, 5), 1);
-    assert_eq!(modulus(-3, 5), 2);
-    assert_eq!(modulus(-2, 5), 3);
-    assert_eq!(modulus(-1, 5), 4);
-    assert_eq!(modulus(0, 5), 0);
-    assert_eq!(modulus(1, 5), 1);
-    assert_eq!(modulus(2, 5), 2);
-    assert_eq!(modulus(3, 5), 3);
-    assert_eq!(modulus(4, 5), 4);
-    assert_eq!(modulus(5, 5), 0);
-    assert_eq!(modulus(6, 5), 1);
-    assert_eq!(modulus(7, 5), 2);
-}
-#[test]
-fn test_det_set() {
-    let mut s: DETSet<(isize, isize)> = Default::default();
-    
-    assert!(s.is_empty());
-    assert!(!s.add(vec![]));
-    assert!(s.is_empty());
-    assert!(!s.add(vec![(0, 1)]));
-    assert!(s.is_empty());
-    
-    assert!(s.add(vec![(0, 1), (0, 2)]));
-    assert_eq!(s.len(), 1);
-    assert!(!s.add(vec![(0, 1), (0, 2)]));
-    assert_eq!(s.len(), 1);
-
-    assert!(!s.add(vec![(0, 2), (0, 3)]));
-    assert_eq!(s.len(), 1);
-
-    assert!(s.add(vec![(0, 3), (0, 4)]));
-    assert_eq!(s.len(), 2);
-
-    assert!(!s.add(vec![(0, 2), (0, 5)]));
-    assert_eq!(s.len(), 2);
-    assert!(!s.add(vec![(0, 2), (0, 4)]));
-    assert_eq!(s.len(), 2);
-
-    assert!(!s.add(vec![(0, 3), (0, 4)]));
-    assert_eq!(s.len(), 2);
-    assert!(!s.add(vec![(0, 3), (0, 4), (0, 5)]));
-    assert_eq!(s.len(), 2);
-    assert!(s.add(vec![(0, 3), (0, 4), (0, 5), (0, 6)]));
-    assert_eq!(s.len(), 3);
-
-    assert!(s.add(vec![(0, 6), (1, 2)]));
-    assert_eq!(s.len(), 4);
-    assert!(s.add(vec![(0, 4), (1, 5), (1, 6)]));
-    assert_eq!(s.len(), 5);
-}
-#[test]
-fn test_count_equal() {
-    assert_eq!(count_equal(&[0i32;0], &[]), 0);
-    assert_eq!(count_equal(&[1], &[]), 0);
-    assert_eq!(count_equal(&[1, 2], &[]), 0);
-    assert_eq!(count_equal(&[], &[2]), 0);
-    assert_eq!(count_equal(&[], &[2, 3]), 0);
-
-    assert_eq!(count_equal(&[1, 2, 3], &[4, 5, 6]), 0);
-    assert_eq!(count_equal(&[1], &[4, 5, 6]), 0);
-    assert_eq!(count_equal(&[1, 2, 3], &[4, 5, 6, 7, 8, 9]), 0);
-    // symmetric
-    assert_eq!(count_equal(&[4, 5, 6], &[1, 2, 3]), 0);
-    assert_eq!(count_equal(&[4, 5, 6], &[1]), 0);
-    assert_eq!(count_equal(&[4, 5, 6, 7, 8, 9], &[1, 2, 3]), 0);
-
-    assert_eq!(count_equal(&[1, 2, 3], &[1, 5, 6]), 1);
-    assert_eq!(count_equal(&[1, 2, 3], &[1, 5, 6]), 1);
-    // symmetric
-    assert_eq!(count_equal(&[1, 5, 6], &[1, 2, 3]), 1);
-    assert_eq!(count_equal(&[1, 5, 6], &[1, 2, 3]), 1);
-
-    assert_eq!(count_equal(&[1, 2, 3], &[1, 3, 5, 6]), 2);
-    assert_eq!(count_equal(&[1, 2, 3], &[-5, -2, 1, 3, 5, 6]), 2);
-    assert_eq!(count_equal(&[1, 2, 3], &[-5, -2, 0, 1, 3, 5, 6]), 2);
-    // symmetric
-    assert_eq!(count_equal(&[1, 3, 5, 6], &[1, 2, 3]), 2);
-    assert_eq!(count_equal(&[-5, -2, 1, 3, 5, 6], &[1, 2, 3]), 2);
-    assert_eq!(count_equal(&[-5, -2, 0, 1, 3, 5, 6], &[1, 2, 3]), 2);
-
-    assert_eq!(count_equal(&[6, 16, 22, 23], &[6, 16, 22, 23]), 4);
-    assert_eq!(count_equal(&[6, 16, 22, 23, 77], &[6, 16, 22, 23, 77]), 5);
-    assert_eq!(count_equal(&[6, 16, 22, 23, 77, 102], &[6, 16, 22, 23, 77, 102]), 6);
-
-    assert_eq!(count_equal(&[6, 16, 22, 23], &[6, 16, 17, 18, 19, 22, 23]), 4);
-    assert_eq!(count_equal(&[6, 16, 22, 23, 77], &[6, 16, 22, 23, 24, 77]), 5);
-    assert_eq!(count_equal(&[6, 16, 22, 23, 77, 102], &[6, 7, 16, 22, 23, 70, 71, 72, 77, 100, 102]), 6);
-    // symmetric
-    assert_eq!(count_equal(&[6, 16, 17, 18, 19, 22, 23], &[6, 16, 22, 23]), 4);
-    assert_eq!(count_equal(&[6, 16, 22, 23, 24, 77], &[6, 16, 22, 23, 77]), 5);
-    assert_eq!(count_equal(&[6, 7, 16, 22, 23, 70, 71, 72, 77, 100, 102], &[6, 16, 22, 23, 77, 102]), 6);
-
-    assert_eq!(count_equal(&[10, 100, 1000], &[1, 2, 3]), 0);
-    assert_eq!(count_equal(&[10, 100, 1000], &[15, 18, 90, 98, 99]), 0);
-    assert_eq!(count_equal(&[10, 100, 1000], &[101, 104, 204, 598, 999]), 0);
-    assert_eq!(count_equal(&[10, 100, 1000], &[100, 101, 104, 204, 598, 999]), 1);
-    assert_eq!(count_equal(&[10, 100, 1000], &[101, 104, 204, 598, 999, 1000]), 1);
-    assert_eq!(count_equal(&[10, 100, 1000], &[100, 101, 104, 204, 598, 999, 1000]), 2);
-    assert_eq!(count_equal(&[10, 100, 1000], &[1002, 1044, 1843, 2948, 1934]), 0);
-    assert_eq!(count_equal(&[10, 100, 1000], &[1000, 1002, 1044, 1843, 2948, 1934]), 1);
-    assert_eq!(count_equal(&[10, 100, 1000], &[999, 1000, 1002, 1044, 1843, 2948, 1934]), 1);
-    // symmetric
-    assert_eq!(count_equal(&[1, 2, 3], &[10, 100, 1000]), 0);
-    assert_eq!(count_equal(&[15, 18, 90, 98, 99], &[10, 100, 1000]), 0);
-    assert_eq!(count_equal(&[101, 104, 204, 598, 999], &[10, 100, 1000]), 0);
-    assert_eq!(count_equal(&[100, 101, 104, 204, 598, 999], &[10, 100, 1000]), 1);
-    assert_eq!(count_equal(&[101, 104, 204, 598, 999, 1000], &[10, 100, 1000]), 1);
-    assert_eq!(count_equal(&[100, 101, 104, 204, 598, 999, 1000], &[10, 100, 1000]), 2);
-    assert_eq!(count_equal(&[1002, 1044, 1843, 2948, 1934], &[10, 100, 1000]), 0);
-    assert_eq!(count_equal(&[1000, 1002, 1044, 1843, 2948, 1934], &[10, 100, 1000]), 1);
-    assert_eq!(count_equal(&[999, 1000, 1002, 1044, 1843, 2948, 1934], &[10, 100, 1000]), 1);
-}
 #[test]
 fn test_rect_pos() {
     let mut ggg = RectTessellation::new(4, 4);
-    let mut gg = ggg.solver::<OLDSet<(isize, isize)>>(0.9);
+    let mut gg = ggg.solver::<codesets::OLD<(isize, isize)>>(0.9);
     let g = &mut gg.base;
 
     assert_eq!(g.id_to_inside(0, 0), 0);
@@ -1221,231 +751,40 @@ fn test_rect_pos() {
     assert_eq!(g.id_to_inside(4, -1), 15);
     assert_eq!(g.id_to_inside(-1, -1), 11);
 }
-#[test]
-fn test_hex_pos() {
-    let mut p = AdjacentHex::new(0, 0);
-    assert_eq!(p.next(), Some((-1, 0)));
-    assert_eq!(p.next(), Some((0, -1)));
-    assert_eq!(p.next(), Some((0, 1)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
 
-    p = AdjacentHex::new(1, 0);
-    assert_eq!(p.next(), Some((1, -1)));
-    assert_eq!(p.next(), Some((1, 1)));
-    assert_eq!(p.next(), Some((2, 0)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentHex::new(2, 0);
-    assert_eq!(p.next(), Some((1, 0)));
-    assert_eq!(p.next(), Some((2, -1)));
-    assert_eq!(p.next(), Some((2, 1)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentHex::new(-3, 0);
-    assert_eq!(p.next(), Some((-3, -1)));
-    assert_eq!(p.next(), Some((-3, 1)));
-    assert_eq!(p.next(), Some((-2, 0)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentHex::new(-10, 0);
-    assert_eq!(p.next(), Some((-11, 0)));
-    assert_eq!(p.next(), Some((-10, -1)));
-    assert_eq!(p.next(), Some((-10, 1)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentHex::new(0, 1);
-    assert_eq!(p.next(), Some((0, 0)));
-    assert_eq!(p.next(), Some((0, 2)));
-    assert_eq!(p.next(), Some((1, 1)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentHex::new(1, 1);
-    assert_eq!(p.next(), Some((0, 1)));
-    assert_eq!(p.next(), Some((1, 0)));
-    assert_eq!(p.next(), Some((1, 2)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentHex::new(-3, -1);
-    assert_eq!(p.next(), Some((-4, -1)));
-    assert_eq!(p.next(), Some((-3, -2)));
-    assert_eq!(p.next(), Some((-3, 0)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-}
-#[test]
-fn test_tmb_pos() {
-    let mut p = AdjacentTumblingBlock::new(0, 0);
-    assert_eq!(p.next(), Some((-1, -1)));
-    assert_eq!(p.next(), Some((-1, 0)));
-    assert_eq!(p.next(), Some((0, -1)));
-    assert_eq!(p.next(), Some((0, 1)));
-    assert_eq!(p.next(), Some((1, 0)));
-    assert_eq!(p.next(), Some((1, 1)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentTumblingBlock::new(0, 1);
-    assert_eq!(p.next(), Some((-1, 1)));
-    assert_eq!(p.next(), Some((0, 0)));
-    assert_eq!(p.next(), Some((1, 2)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentTumblingBlock::new(0, 2);
-    assert_eq!(p.next(), Some((-1, 1)));
-    assert_eq!(p.next(), Some((0, 3)));
-    assert_eq!(p.next(), Some((1, 2)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentTumblingBlock::new(-1, -2);
-    assert_eq!(p.next(), Some((-2, -3)));
-    assert_eq!(p.next(), Some((-2, -2)));
-    assert_eq!(p.next(), Some((-1, -3)));
-    assert_eq!(p.next(), Some((-1, -1)));
-    assert_eq!(p.next(), Some((0, -2)));
-    assert_eq!(p.next(), Some((0, -1)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentTumblingBlock::new(1, 3);
-    assert_eq!(p.next(), Some((0, 3)));
-    assert_eq!(p.next(), Some((1, 2)));
-    assert_eq!(p.next(), Some((2, 4)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentTumblingBlock::new(3, 2);
-    assert_eq!(p.next(), Some((2, 1)));
-    assert_eq!(p.next(), Some((3, 3)));
-    assert_eq!(p.next(), Some((4, 2)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentTumblingBlock::new(-2, -2);
-    assert_eq!(p.next(), Some((-3, -3)));
-    assert_eq!(p.next(), Some((-2, -1)));
-    assert_eq!(p.next(), Some((-1, -2)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentTumblingBlock::new(-2, -3);
-    assert_eq!(p.next(), Some((-3, -3)));
-    assert_eq!(p.next(), Some((-2, -4)));
-    assert_eq!(p.next(), Some((-1, -2)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentTumblingBlock::new(-2, 2);
-    assert_eq!(p.next(), Some((-3, 1)));
-    assert_eq!(p.next(), Some((-3, 2)));
-    assert_eq!(p.next(), Some((-2, 1)));
-    assert_eq!(p.next(), Some((-2, 3)));
-    assert_eq!(p.next(), Some((-1, 2)));
-    assert_eq!(p.next(), Some((-1, 3)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-
-    p = AdjacentTumblingBlock::new(1, -2);
-    assert_eq!(p.next(), Some((0, -3)));
-    assert_eq!(p.next(), Some((1, -1)));
-    assert_eq!(p.next(), Some((2, -2)));
-    for _ in 0..10 {
-        assert_eq!(p.next(), None);
-    }
-}
-#[test]
-fn test_adjacent4_sorted() {
-    for &(r, c) in &[(0, 0), (4, 2), (-1, 2), (-18, -4), (1, -7)] {
-        let v: Vec<_> = Adjacent4::new(r, c).collect();
-        assert!(is_sorted(&v));
-    }
-}
-#[test]
-fn test_adjacent8_sorted() {
-    for &(r, c) in &[(0, 0), (4, 2), (-1, 2), (-18, -4), (1, -7)] {
-        let v: Vec<_> = Adjacent8::new(r, c).collect();
-        assert!(is_sorted(&v));
-    }
-}
-#[test]
-fn test_adjacent_tri_sorted() {
-    for &(r, c) in &[(0, 0), (4, 2), (-1, 2), (-18, -4), (1, -7)] {
-        let v: Vec<_> = AdjacentTriangle::new(r, c).collect();
-        assert!(is_sorted(&v));
-    }
-}
-#[test]
-fn test_adjacent_hex_sorted() {
-    for &(r, c) in &[(0, 0), (4, 2), (-1, 2), (-18, -4), (1, -7)] {
-        let v: Vec<_> = AdjacentHex::new(r, c).collect();
-        assert!(is_sorted(&v));
-    }
-}
-#[test]
-fn test_adjacent_tmb_sorted() {
-    for &(r, c) in &[(0, 0), (0, 1), (0, 2), (4, 2), (-1, 2), (-18, -4), (1, -7)] {
-        let v: Vec<_> = AdjacentTumblingBlock::new(r, c).collect();
-        assert!(is_sorted(&v));
-    }
-}
 #[test]
 fn test_lower_bound_index() {
-    let v = LowerBoundSearcher::<OLDSet<(isize, isize)>>::new();
+    let v = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new();
     assert_eq!(v.to_index(0, 0), 0);
     assert_eq!(v.to_index(2, 1), 11);
 }
 
 fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
     let res = match mode {
-        "old:king" => tess.try_satisfy::<OLDSet<(isize, isize)>, Adjacent8>(thresh),
-        "red:king" => tess.try_satisfy::<REDSet<(isize, isize)>, Adjacent8>(thresh),
-        "det:king" => tess.try_satisfy::<DETSet<(isize, isize)>, Adjacent8>(thresh),
-        "err:king" => tess.try_satisfy::<ERRSet<(isize, isize)>, Adjacent8>(thresh),
+        "old:king" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenKing>(thresh),
+        "red:king" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenKing>(thresh),
+        "det:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenKing>(thresh),
+        "err:king" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenKing>(thresh),
 
-        "old:tri" => tess.try_satisfy::<OLDSet<(isize, isize)>, AdjacentTriangle>(thresh),
-        "red:tri" => tess.try_satisfy::<REDSet<(isize, isize)>, AdjacentTriangle>(thresh),
-        "det:tri" => tess.try_satisfy::<DETSet<(isize, isize)>, AdjacentTriangle>(thresh),
-        "err:tri" => tess.try_satisfy::<ERRSet<(isize, isize)>, AdjacentTriangle>(thresh),
+        "old:tri" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenTri>(thresh),
+        "red:tri" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTri>(thresh),
+        "det:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTri>(thresh),
+        "err:tri" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTri>(thresh),
 
-        "old:grid" => tess.try_satisfy::<OLDSet<(isize, isize)>, Adjacent4>(thresh),
-        "red:grid" => tess.try_satisfy::<REDSet<(isize, isize)>, Adjacent4>(thresh),
-        "det:grid" => tess.try_satisfy::<DETSet<(isize, isize)>, Adjacent4>(thresh),
-        "err:grid" => tess.try_satisfy::<ERRSet<(isize, isize)>, Adjacent4>(thresh),
+        "old:grid" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenGrid>(thresh),
+        "red:grid" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenGrid>(thresh),
+        "det:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenGrid>(thresh),
+        "err:grid" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenGrid>(thresh),
 
-        "old:hex" => tess.try_satisfy::<OLDSet<(isize, isize)>, AdjacentHex>(thresh),
-        "red:hex" => tess.try_satisfy::<REDSet<(isize, isize)>, AdjacentHex>(thresh),
-        "det:hex" => tess.try_satisfy::<DETSet<(isize, isize)>, AdjacentHex>(thresh),
-        "err:hex" => tess.try_satisfy::<ERRSet<(isize, isize)>, AdjacentHex>(thresh),
+        "old:hex" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenHex>(thresh),
+        "red:hex" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenHex>(thresh),
+        "det:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenHex>(thresh),
+        "err:hex" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenHex>(thresh),
 
-        "old:tmb" => tess.try_satisfy::<OLDSet<(isize, isize)>, AdjacentTumblingBlock>(thresh),
-        "red:tmb" => tess.try_satisfy::<REDSet<(isize, isize)>, AdjacentTumblingBlock>(thresh),
-        "det:tmb" => tess.try_satisfy::<DETSet<(isize, isize)>, AdjacentTumblingBlock>(thresh),
-        "err:tmb" => tess.try_satisfy::<ERRSet<(isize, isize)>, AdjacentTumblingBlock>(thresh),
+        "old:tmb" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenTMB>(thresh),
+        "red:tmb" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTMB>(thresh),
+        "det:tmb" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTMB>(thresh),
+        "err:tmb" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTMB>(thresh),
 
         _ => {
             eprintln!("unknown type: {}", mode);
@@ -1455,7 +794,7 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
     match res {
         Some(min) => {
             let n = tess.size();
-            let d = gcd(min, n);
+            let d = util::gcd(min, n);
             println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), tess);
         },
         None => println!("no solution found within thresh {}", thresh),
@@ -1473,25 +812,25 @@ fn theo_helper(mode: &str, thresh: f64) {
         println!();
     };
     let ((n, k), f) = match mode {
-        "old:king" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
-        "red:king" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
-        "det:king" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
-        "err:king" => LowerBoundSearcher::<ERRSet<(isize, isize)>>::new().calc::<Adjacent8>(thresh, Some(&mut handler)),
+        "old:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
+        "red:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
+        "det:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
+        "err:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
 
-        "old:tri" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
-        "red:tri" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
-        "det:tri" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
-        "err:tri" => LowerBoundSearcher::<ERRSet<(isize, isize)>>::new().calc::<AdjacentTriangle>(thresh, Some(&mut handler)),
+        "old:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
+        "red:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
+        "det:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
+        "err:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
 
-        "old:grid" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
-        "red:grid" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
-        "det:grid" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
-        "err:grid" => LowerBoundSearcher::<ERRSet<(isize, isize)>>::new().calc::<Adjacent4>(thresh, Some(&mut handler)),
+        "old:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
+        "red:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
+        "det:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
+        "err:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
 
-        "old:hex" => LowerBoundSearcher::<OLDSet<(isize, isize)>>::new().calc::<AdjacentHex>(thresh, Some(&mut handler)),
-        "red:hex" => LowerBoundSearcher::<REDSet<(isize, isize)>>::new().calc::<AdjacentHex>(thresh, Some(&mut handler)),
-        "det:hex" => LowerBoundSearcher::<DETSet<(isize, isize)>>::new().calc::<AdjacentHex>(thresh, Some(&mut handler)),
-        "err:hex" => LowerBoundSearcher::<ERRSet<(isize, isize)>>::new().calc::<AdjacentHex>(thresh, Some(&mut handler)),
+        "old:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
+        "red:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
+        "det:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
+        "err:hex" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
 
         _ => {
             eprintln!("unknown type: {}", mode);
@@ -1503,9 +842,10 @@ fn theo_helper(mode: &str, thresh: f64) {
 }
 fn finite_helper(mut g: FiniteGraph, mode: &str, count: usize) {
     let success = match mode {
-        "old" => g.solver::<OLDSet<usize>>().find_solution(count),
-        "red" => g.solver::<REDSet<usize>>().find_solution(count),
-        "det" => g.solver::<DETSet<usize>>().find_solution(count),
+        "old" => g.solver::<codesets::OLD<usize>>().find_solution(count),
+        "red" => g.solver::<codesets::RED<usize>>().find_solution(count),
+        "det" => g.solver::<codesets::DET<usize>>().find_solution(count),
+        "err" => g.solver::<codesets::ERR<usize>>().find_solution(count),
 
         _ => {
             eprintln!("unknown type: {}", mode);
