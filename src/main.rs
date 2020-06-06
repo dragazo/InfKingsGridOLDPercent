@@ -49,8 +49,9 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: codesets::Set<(isize, isize)>
         self.interior_codes.clear();
         for r in 1..row - 1 {
             for c in 1..self.src.cols as isize - 1 {
+                let is_detector = self.src.old_set[self.id_to_inside(r, c)];
                 let code = self.get_locating_code::<Adj>((r, c));
-                if !self.interior_codes.add(code) {
+                if !self.interior_codes.add(is_detector, code) {
                     return false;
                 }
             }
@@ -61,16 +62,18 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: codesets::Set<(isize, isize)>
         self.codes.clear();
         for &r in &[-1, 0, self.src.rows as isize - 1, self.src.rows as isize] {
             for c in -1 ..= self.src.cols as isize {
+                let is_detector = self.src.old_set[self.id_to_inside(r, c)];
                 let code = self.get_locating_code::<Adj>((r, c));
-                if !self.interior_codes.can_add(&code) || !self.codes.add(code) {
+                if !self.interior_codes.can_add(is_detector, &code) || !self.codes.add(is_detector, code) {
                     return false;
                 }
             }
         }
         for r in 1 ..= self.src.rows as isize - 2 {
             for &c in &[-1, 0, self.src.cols as isize - 1, self.src.cols as isize] {
+                let is_detector = self.src.old_set[self.id_to_inside(r, c)];
                 let code = self.get_locating_code::<Adj>((r, c));
-                if !self.interior_codes.can_add(&code) || !self.codes.add(code) {
+                if !self.interior_codes.can_add(is_detector, &code) || !self.codes.add(is_detector, code) {
                     return false;
                 }
             }
@@ -221,8 +224,9 @@ where Codes: codesets::Set<(isize, isize)>
         self.codes.clear();
         for p in self.interior {
             if p.0 >= row - 1 { break; }
+            let is_detector = self.old_set.contains(self.tessellation_map.get(p).unwrap());
             let code = self.get_locating_code::<Adj>(*p);
-            if !self.codes.add(code) {
+            if !self.codes.add(is_detector, code) {
                 return false;
             }
         }
@@ -258,8 +262,7 @@ where Codes: codesets::Set<(isize, isize)>
     fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
         let mut v = Vec::with_capacity(9);
         for x in Adj::new(pos.0, pos.1) {
-            let mapped = self.tessellation_map.get(&x).unwrap();
-            if self.old_set.contains(mapped) {
+            if self.old_set.contains(self.tessellation_map.get(&x).unwrap()) {
                 v.push(x);
             }
         }
@@ -268,8 +271,9 @@ where Codes: codesets::Set<(isize, isize)>
     fn is_old<Adj: adj::AdjacentIterator>(&mut self) -> bool {
         self.codes.clear();
         for pos in self.shape_with_padding {
+            let is_detector = self.old_set.contains(self.tessellation_map.get(pos).unwrap());
             let code = self.get_locating_code::<Adj>(*pos);
-            if !self.codes.add(code) {
+            if !self.codes.add(is_detector, code) {
                 return false;
             }
         }
@@ -473,9 +477,10 @@ where Codes: codesets::Set<(isize, isize)>
     }
     fn is_valid<Adj: adj::AdjacentIterator>(&mut self) -> bool {
         self.codes.clear();
-        for p in Adj::closed_neighborhood_unord(2, 2) {
+        for p in Adj::Closed::new(2, 2) {
+            let is_detector = self.data[self.to_index(p.0, p.1)];
             let code = self.get_locating_code::<Adj>(p.0, p.1);
-            if !self.codes.add(code) {
+            if !self.codes.add(is_detector, code) {
                 return false;
             }
         }
@@ -576,8 +581,9 @@ where Codes: codesets::Set<usize>
     fn is_old(&mut self) -> bool {
         self.codes.clear();
         for i in 0..self.verts.len() {
+            let is_detector = self.detectors.contains(&i);
             let code = self.get_locating_code(i);
-            if !self.codes.add(code) {
+            if !self.codes.add(is_detector, code) {
                 return false;
             }
         }
@@ -761,6 +767,9 @@ fn test_lower_bound_index() {
 
 fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
     let res = match mode {
+        "dom:king" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedKing>(thresh),
+        "odom:king" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenKing>(thresh),
+        "ld:king" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenKing>(thresh),
         "ic:king" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedKing>(thresh),
         "redic:king" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedKing>(thresh),
         "detic:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedKing>(thresh),
@@ -770,6 +779,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
         "det:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenKing>(thresh),
         "err:king" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenKing>(thresh),
 
+        "dom:tri" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedTri>(thresh),
+        "odom:tri" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenTri>(thresh),
+        "ld:tri" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenTri>(thresh),
         "ic:tri" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedTri>(thresh),
         "redic:tri" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedTri>(thresh),
         "detic:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedTri>(thresh),
@@ -779,6 +791,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
         "det:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTri>(thresh),
         "err:tri" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTri>(thresh),
 
+        "dom:grid" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedGrid>(thresh),
+        "odom:grid" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenGrid>(thresh),
+        "ld:grid" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenGrid>(thresh),
         "ic:grid" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedGrid>(thresh),
         "redic:grid" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedGrid>(thresh),
         "detic:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedGrid>(thresh),
@@ -788,6 +803,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
         "det:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenGrid>(thresh),
         "err:grid" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenGrid>(thresh),
 
+        "dom:hex" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedHex>(thresh),
+        "odom:hex" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenHex>(thresh),
+        "ld:hex" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenHex>(thresh),
         "ic:hex" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedHex>(thresh),
         "redic:hex" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedHex>(thresh),
         "detic:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedHex>(thresh),
@@ -797,6 +815,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
         "det:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenHex>(thresh),
         "err:hex" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenHex>(thresh),
 
+        "dom:tmb" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedTMB>(thresh),
+        "odom:tmb" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenTMB>(thresh),
+        "ld:tmb" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenTMB>(thresh),
         "ic:tmb" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedTMB>(thresh),
         "redic:tmb" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedTMB>(thresh),
         "detic:tmb" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedTMB>(thresh),
@@ -832,25 +853,49 @@ fn theo_helper(mode: &str, thresh: f64) {
         println!();
     };
     let ((n, k), f) = match mode {
+        "dom:king" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut handler)),
+        "odom:king" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
+        "ld:king" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
         "ic:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut handler)),
+        "redic:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut handler)),
+        "detic:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut handler)),
+        "erric:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut handler)),
         "old:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
         "red:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
         "det:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
         "err:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
 
+        "dom:tri" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut handler)),
+        "odom:tri" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
+        "ld:tri" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
         "ic:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut handler)),
+        "redic:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut handler)),
+        "detic:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut handler)),
+        "erric:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut handler)),
         "old:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
         "red:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
         "det:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
         "err:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
 
+        "dom:grid" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut handler)),
+        "odom:grid" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
+        "ld:grid" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
         "ic:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut handler)),
+        "redic:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut handler)),
+        "detic:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut handler)),
+        "erric:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut handler)),
         "old:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
         "red:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
         "det:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
         "err:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
 
+        "dom:hex" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut handler)),
+        "odom:hex" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
+        "ld:hex" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
         "ic:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut handler)),
+        "redic:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut handler)),
+        "detic:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut handler)),
+        "erric:hex" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut handler)),
         "old:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
         "red:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
         "det:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),

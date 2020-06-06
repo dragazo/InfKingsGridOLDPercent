@@ -15,10 +15,10 @@ fn drain<T: AdjacentIterator>(mut iter: T) -> Vec<(isize, isize)> {
 
 // additionally required to iterate in lexicographic sorted order and not have duplicates (see unit tests below)
 pub trait AdjacentIterator: Iterator<Item = (isize, isize)> {
+    type Open: OpenIterator;
+    type Closed: ClosedIterator;
+
     fn new(row: isize, col: isize) -> Self;
-    
-    type ClosedNeighborhoodUnord: Iterator<Item = (isize, isize)>;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord;
 }
 
 // some logic might require open/closed so have a special tag for them to use for trait bounds
@@ -31,13 +31,11 @@ pub struct ClosedKing {
     state: usize,
 }
 impl AdjacentIterator for ClosedKing {
+    type Open = OpenKing;
+    type Closed = Self;
+
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
-    }
-
-    type ClosedNeighborhoodUnord = Self;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        Self::new(row, col)
     }
 }
 impl Iterator for ClosedKing {
@@ -72,13 +70,11 @@ pub struct OpenKing {
     state: usize,
 }
 impl AdjacentIterator for OpenKing {
+    type Open = Self;
+    type Closed = ClosedKing;
+
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
-    }
-
-    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        std::iter::once((row, col)).chain(Self::new(row, col))
     }
 }
 impl Iterator for OpenKing {
@@ -112,13 +108,11 @@ pub struct ClosedGrid {
     state: usize,
 }
 impl AdjacentIterator for ClosedGrid {
+    type Open = OpenGrid;
+    type Closed = Self;
+
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
-    }
-
-    type ClosedNeighborhoodUnord = Self;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        Self::new(row, col)
     }
 }
 impl Iterator for ClosedGrid {
@@ -152,13 +146,11 @@ pub struct OpenGrid {
     state: usize,
 }
 impl AdjacentIterator for OpenGrid {
+    type Open = Self;
+    type Closed = ClosedGrid;
+
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
-    }
-
-    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        std::iter::once((row, col)).chain(Self::new(row, col))
     }
 }
 impl Iterator for OpenGrid {
@@ -191,13 +183,11 @@ pub struct ClosedTri {
     state: usize,
 }
 impl AdjacentIterator for ClosedTri {
+    type Open = OpenTri;
+    type Closed = Self;
+
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
-    }
-
-    type ClosedNeighborhoodUnord = Self;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        Self::new(row, col)
     }
 }
 impl Iterator for ClosedTri {
@@ -233,13 +223,11 @@ pub struct OpenTri {
     state: usize,
 }
 impl AdjacentIterator for OpenTri {
+    type Open = Self;
+    type Closed = ClosedTri;
+
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
-    }
-
-    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        std::iter::once((row, col)).chain(Self::new(row, col))
     }
 }
 impl Iterator for OpenTri {
@@ -274,16 +262,14 @@ pub struct ClosedHex {
     state: usize,
 }
 impl AdjacentIterator for ClosedHex {
+    type Open = OpenHex;
+    type Closed = Self;
+
     fn new(row: isize, col: isize) -> Self {
         Self {
             row, col,
             state: if (row + col) % 2 == 0 { 0 } else { 5 },
         }
-    }
-
-    type ClosedNeighborhoodUnord = Self;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        Self::new(row, col)
     }
 }
 impl Iterator for ClosedHex {
@@ -320,16 +306,14 @@ pub struct OpenHex {
     state: usize,
 }
 impl AdjacentIterator for OpenHex {
+    type Open = Self;
+    type Closed = ClosedHex;
+
     fn new(row: isize, col: isize) -> Self {
         Self {
             row, col,
             state: if (row + col) % 2 == 0 { 0 } else { 4 },
         }
-    }
-
-    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        std::iter::once((row, col)).chain(Self::new(row, col))
     }
 }
 impl Iterator for OpenHex {
@@ -365,16 +349,14 @@ pub struct ClosedTMB {
     state: usize,
 }
 impl AdjacentIterator for ClosedTMB {
+    type Open = OpenTMB;
+    type Closed = Self;
+
     fn new(row: isize, col: isize) -> Self {
         Self {
             row, col,
             state: [0, 8, 13][util::modulus(row + col, 3)],
         }
-    }
-
-    type ClosedNeighborhoodUnord = Self;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        Self::new(row, col)
     }
 }
 impl Iterator for ClosedTMB {
@@ -415,16 +397,14 @@ pub struct OpenTMB {
     state: usize,
 }
 impl AdjacentIterator for OpenTMB {
+    type Open = Self;
+    type Closed = ClosedTMB;
+
     fn new(row: isize, col: isize) -> Self {
         Self {
             row, col,
             state: [0, 7, 11][util::modulus(row + col, 3)],
         }
-    }
-
-    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
-    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
-        std::iter::once((row, col)).chain(Self::new(row, col))
     }
 }
 impl Iterator for OpenTMB {
