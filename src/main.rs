@@ -37,7 +37,7 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: codesets::Set<(isize, isize)>
         r * self.src.cols + c
     }
     fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
-        let mut v = Vec::with_capacity(8);
+        let mut v = Vec::with_capacity(9);
         for x in Adj::new(pos.0, pos.1) {
             if self.src.old_set[self.id_to_inside(x.0, x.1)] {
                 v.push(x)
@@ -256,7 +256,7 @@ impl<Codes> Solver for GeometrySolver<'_, Codes>
 where Codes: codesets::Set<(isize, isize)>
 {
     fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
-        let mut v = Vec::with_capacity(8);
+        let mut v = Vec::with_capacity(9);
         for x in Adj::new(pos.0, pos.1) {
             let mapped = self.tessellation_map.get(&x).unwrap();
             if self.old_set.contains(mapped) {
@@ -460,7 +460,7 @@ where Codes: codesets::Set<(isize, isize)>
         row as usize * 5 + col as usize
     }
     fn get_locating_code<Adj: adj::AdjacentIterator>(&self, row: isize, col: isize) -> Vec<(isize, isize)> {
-        let mut v = Vec::with_capacity(8);
+        let mut v = Vec::with_capacity(9);
         for p in Adj::new(row, col) {
             if self.data[self.to_index(p.0, p.1)] {
                 v.push(p);
@@ -473,7 +473,7 @@ where Codes: codesets::Set<(isize, isize)>
     }
     fn is_valid<Adj: adj::AdjacentIterator>(&mut self) -> bool {
         self.codes.clear();
-        for p in std::iter::once((2, 2)).chain(Adj::new(2, 2)) {
+        for p in Adj::closed_neighborhood_unord(2, 2) {
             let code = self.get_locating_code::<Adj>(p.0, p.1);
             if !self.codes.add(code) {
                 return false;
@@ -538,10 +538,10 @@ where Codes: codesets::Set<(isize, isize)>
         self.over_thresh_handler = over_thresh_handler;
         self.calc_recursive::<Adj>(0);
 
-        // lcm(1..=8) = 840, so multiply and divide by 840 to create an exact fractional representation
-        let v = (self.highest * 840.0).round() as usize;
-        let d = util::gcd(v, 840);
-        ((840 / d, v / d), 1.0 / self.highest)
+        // lcm(1..=9) = 2520, so multiply and divide by 2520 to create an exact fractional representation
+        let v = (self.highest * 2520.0).round() as usize;
+        let d = util::gcd(v, 2520);
+        ((2520 / d, v / d), 1.0 / self.highest)
     }
     fn new() -> Self {
         Self {
@@ -565,7 +565,7 @@ impl<Codes> FiniteGraphSolver<'_, Codes>
 where Codes: codesets::Set<usize>
 {
     fn get_locating_code(&self, p: usize) -> Vec<usize> {
-        let mut v = Vec::with_capacity(8);
+        let mut v = Vec::with_capacity(9);
         for x in &self.verts[p].adj {
             if self.detectors.contains(x) {
                 v.push(*x);
@@ -661,8 +661,8 @@ impl FiniteGraph {
                     Some(x) => x,
                     None => return Err(GraphLoadError::InvalidFormat("encountered token without a ':' separator")),
                 };
-                let a = &tok[..p].trim();
-                let b = &tok[p+1..].trim();
+                let a = tok[..p].trim();
+                let b = tok[p+1..].trim();
                 if b.find(':').is_some() {
                     return Err(GraphLoadError::InvalidFormat("encoundered token with multiple ':' separators"));
                 }
@@ -761,26 +761,46 @@ fn test_lower_bound_index() {
 
 fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, thresh: f64) {
     let res = match mode {
+        "ic:king" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedKing>(thresh),
+        "redic:king" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedKing>(thresh),
+        "detic:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedKing>(thresh),
+        "erric:king" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedKing>(thresh),
         "old:king" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenKing>(thresh),
         "red:king" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenKing>(thresh),
         "det:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenKing>(thresh),
         "err:king" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenKing>(thresh),
 
+        "ic:tri" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedTri>(thresh),
+        "redic:tri" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedTri>(thresh),
+        "detic:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedTri>(thresh),
+        "erric:tri" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedTri>(thresh),
         "old:tri" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenTri>(thresh),
         "red:tri" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTri>(thresh),
         "det:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTri>(thresh),
         "err:tri" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTri>(thresh),
 
+        "ic:grid" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedGrid>(thresh),
+        "redic:grid" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedGrid>(thresh),
+        "detic:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedGrid>(thresh),
+        "erric:grid" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedGrid>(thresh),
         "old:grid" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenGrid>(thresh),
         "red:grid" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenGrid>(thresh),
         "det:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenGrid>(thresh),
         "err:grid" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenGrid>(thresh),
 
+        "ic:hex" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedHex>(thresh),
+        "redic:hex" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedHex>(thresh),
+        "detic:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedHex>(thresh),
+        "erric:hex" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedHex>(thresh),
         "old:hex" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenHex>(thresh),
         "red:hex" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenHex>(thresh),
         "det:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenHex>(thresh),
         "err:hex" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenHex>(thresh),
 
+        "ic:tmb" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedTMB>(thresh),
+        "redic:tmb" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedTMB>(thresh),
+        "detic:tmb" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedTMB>(thresh),
+        "erric:tmb" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedTMB>(thresh),
         "old:tmb" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenTMB>(thresh),
         "red:tmb" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTMB>(thresh),
         "det:tmb" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTMB>(thresh),
@@ -812,21 +832,25 @@ fn theo_helper(mode: &str, thresh: f64) {
         println!();
     };
     let ((n, k), f) = match mode {
+        "ic:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut handler)),
         "old:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
         "red:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
         "det:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
         "err:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut handler)),
 
+        "ic:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut handler)),
         "old:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
         "red:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
         "det:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
         "err:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut handler)),
 
+        "ic:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut handler)),
         "old:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
         "red:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
         "det:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
         "err:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut handler)),
 
+        "ic:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut handler)),
         "old:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
         "red:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),
         "det:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut handler)),

@@ -16,7 +16,14 @@ fn drain<T: AdjacentIterator>(mut iter: T) -> Vec<(isize, isize)> {
 // additionally required to iterate in lexicographic sorted order and not have duplicates (see unit tests below)
 pub trait AdjacentIterator: Iterator<Item = (isize, isize)> {
     fn new(row: isize, col: isize) -> Self;
+    
+    type ClosedNeighborhoodUnord: Iterator<Item = (isize, isize)>;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord;
 }
+
+// some logic might require open/closed so have a special tag for them to use for trait bounds
+pub trait OpenIterator: AdjacentIterator {}
+pub trait ClosedIterator: AdjacentIterator {}
 
 pub struct ClosedKing {
     row: isize,
@@ -26,6 +33,11 @@ pub struct ClosedKing {
 impl AdjacentIterator for ClosedKing {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
+    }
+
+    type ClosedNeighborhoodUnord = Self;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        Self::new(row, col)
     }
 }
 impl Iterator for ClosedKing {
@@ -47,6 +59,7 @@ impl Iterator for ClosedKing {
         Some(v)
     }
 }
+impl ClosedIterator for ClosedKing {}
 #[test]
 fn test_closed_king() {
     assert_eq!(drain(ClosedKing::new(0, 0)), &[(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)]);
@@ -61,6 +74,11 @@ pub struct OpenKing {
 impl AdjacentIterator for OpenKing {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
+    }
+
+    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        std::iter::once((row, col)).chain(Self::new(row, col))
     }
 }
 impl Iterator for OpenKing {
@@ -81,6 +99,7 @@ impl Iterator for OpenKing {
         Some(v)
     }
 }
+impl OpenIterator for OpenKing {}
 #[test]
 fn test_open_king() {
     assert_eq!(drain(OpenKing::new(0, 0)), &[(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]);
@@ -95,6 +114,11 @@ pub struct ClosedGrid {
 impl AdjacentIterator for ClosedGrid {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
+    }
+
+    type ClosedNeighborhoodUnord = Self;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        Self::new(row, col)
     }
 }
 impl Iterator for ClosedGrid {
@@ -115,6 +139,7 @@ impl Iterator for ClosedGrid {
         Some(v)
     }
 }
+impl ClosedIterator for ClosedGrid {}
 #[test]
 fn test_closed_grid() {
     assert_eq!(drain(ClosedGrid::new(0, 0)), &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)]);
@@ -129,6 +154,11 @@ pub struct OpenGrid {
 impl AdjacentIterator for OpenGrid {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
+    }
+
+    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        std::iter::once((row, col)).chain(Self::new(row, col))
     }
 }
 impl Iterator for OpenGrid {
@@ -148,6 +178,7 @@ impl Iterator for OpenGrid {
         Some(v)
     }
 }
+impl OpenIterator for OpenGrid {}
 #[test]
 fn test_open_grid() {
     assert_eq!(drain(OpenGrid::new(0, 0)), &[(-1, 0), (0, -1), (0, 1), (1, 0)]);
@@ -162,6 +193,11 @@ pub struct ClosedTri {
 impl AdjacentIterator for ClosedTri {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
+    }
+
+    type ClosedNeighborhoodUnord = Self;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        Self::new(row, col)
     }
 }
 impl Iterator for ClosedTri {
@@ -184,6 +220,7 @@ impl Iterator for ClosedTri {
         Some(v)
     }
 }
+impl ClosedIterator for ClosedTri {}
 #[test]
 fn test_closed_tri() {
     assert_eq!(drain(ClosedTri::new(0, 0)), &[(-1, -1), (-1, 0), (0, -1), (0, 0), (0, 1), (1, 0), (1, 1)]);
@@ -198,6 +235,11 @@ pub struct OpenTri {
 impl AdjacentIterator for OpenTri {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
+    }
+
+    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        std::iter::once((row, col)).chain(Self::new(row, col))
     }
 }
 impl Iterator for OpenTri {
@@ -219,6 +261,7 @@ impl Iterator for OpenTri {
         Some(v)
     }
 }
+impl OpenIterator for OpenTri {}
 #[test]
 fn test_open_tri() {
     assert_eq!(drain(OpenTri::new(0, 0)), &[(-1, -1), (-1, 0), (0, -1), (0, 1), (1, 0), (1, 1)]);
@@ -237,6 +280,11 @@ impl AdjacentIterator for ClosedHex {
             state: if (row + col) % 2 == 0 { 0 } else { 5 },
         }
     }
+
+    type ClosedNeighborhoodUnord = Self;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        Self::new(row, col)
+    }
 }
 impl Iterator for ClosedHex {
     type Item = (isize, isize);
@@ -253,6 +301,7 @@ impl Iterator for ClosedHex {
         Some(v)
     }
 }
+impl ClosedIterator for ClosedHex {}
 #[test]
 fn test_closed_hex() {
     assert_eq!(drain(ClosedHex::new(0, 0)), &[(-1, 0), (0, -1), (0, 0), (0, 1)]);
@@ -277,6 +326,11 @@ impl AdjacentIterator for OpenHex {
             state: if (row + col) % 2 == 0 { 0 } else { 4 },
         }
     }
+
+    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        std::iter::once((row, col)).chain(Self::new(row, col))
+    }
 }
 impl Iterator for OpenHex {
     type Item = (isize, isize);
@@ -292,6 +346,7 @@ impl Iterator for OpenHex {
         Some(v)
     }
 }
+impl OpenIterator for OpenHex {}
 #[test]
 fn test_open_hex() {
     assert_eq!(drain(OpenHex::new(0, 0)), &[(-1, 0), (0, -1), (0, 1)]);
@@ -316,6 +371,11 @@ impl AdjacentIterator for ClosedTMB {
             state: [0, 8, 13][util::modulus(row + col, 3)],
         }
     }
+
+    type ClosedNeighborhoodUnord = Self;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        Self::new(row, col)
+    }
 }
 impl Iterator for ClosedTMB {
     type Item = (isize, isize);
@@ -334,6 +394,7 @@ impl Iterator for ClosedTMB {
         Some(v)
     }
 }
+impl ClosedIterator for ClosedTMB {}
 #[test]
 fn test_closed_tmb() {
     assert_eq!(drain(ClosedTMB::new(0, 0)), &[(-1, -1), (-1, 0), (0, -1), (0, 0), (0, 1), (1, 0), (1, 1)]);
@@ -360,6 +421,11 @@ impl AdjacentIterator for OpenTMB {
             state: [0, 7, 11][util::modulus(row + col, 3)],
         }
     }
+
+    type ClosedNeighborhoodUnord = std::iter::Chain<std::iter::Once<(isize, isize)>, Self>;
+    fn closed_neighborhood_unord(row: isize, col: isize) -> Self::ClosedNeighborhoodUnord {
+        std::iter::once((row, col)).chain(Self::new(row, col))
+    }
 }
 impl Iterator for OpenTMB {
     type Item = (isize, isize);
@@ -377,6 +443,7 @@ impl Iterator for OpenTMB {
         Some(v)
     }
 }
+impl OpenIterator for OpenTMB {}
 #[test]
 fn test_open_tmb() {
     assert_eq!(drain(OpenTMB::new(0, 0)), &[(-1, -1), (-1, 0), (0, -1), (0, 1), (1, 0), (1, 1)]);
