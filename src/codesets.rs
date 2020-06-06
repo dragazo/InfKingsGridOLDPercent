@@ -10,12 +10,26 @@ pub trait Set<T>: Default {
 
 #[derive(Default)]
 pub struct DOM<T>(std::marker::PhantomData<T>);
-impl <T> Set<T> for DOM<T>
+impl<T> Set<T> for DOM<T>
 where T: Ord + Default
 {
     fn clear(&mut self) {}
     fn can_add(&self, _is_detector: bool, code: &Vec<T>) -> bool {
         !code.is_empty()
+    }
+    fn add(&mut self, is_detector: bool, code: Vec<T>) -> bool {
+        self.can_add(is_detector, &code)
+    }
+}
+
+#[derive(Default)]
+pub struct EDOM<T>(std::marker::PhantomData<T>);
+impl<T> Set<T> for EDOM<T>
+where T: Ord + Default
+{
+    fn clear(&mut self) {}
+    fn can_add(&self, _is_detector: bool, code: &Vec<T>) -> bool {
+        code.len() == 1
     }
     fn add(&mut self, is_detector: bool, code: Vec<T>) -> bool {
         self.can_add(is_detector, &code)
