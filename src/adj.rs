@@ -14,17 +14,21 @@ fn drain<T: AdjacentIterator>(mut iter: T) -> Vec<(isize, isize)> {
 }
 
 // additionally required to iterate in lexicographic sorted order and not have duplicates (see unit tests below)
-pub trait AdjacentIterator: Iterator<Item = (isize, isize)> {
+pub trait AdjacentIterator: Iterator<Item = (isize, isize)> + Clone {
     type Open: OpenIterator;
     type Closed: ClosedIterator;
 
     fn new(row: isize, col: isize) -> Self;
+    fn at(pos: (isize, isize)) -> Self {
+        Self::new(pos.0, pos.1)
+    }
 }
 
 // some logic might require open/closed so have a special tag for them to use for trait bounds
 pub trait OpenIterator: AdjacentIterator {}
 pub trait ClosedIterator: AdjacentIterator {}
 
+#[derive(Clone, Copy)]
 pub struct ClosedKing {
     row: isize,
     col: isize,
@@ -64,6 +68,7 @@ fn test_closed_king() {
     assert_eq!(drain(ClosedKing::new(6, -11)), &[(5, -12), (5, -11), (5, -10), (6, -12), (6, -11), (6, -10), (7, -12), (7, -11), (7, -10)]);
 }
 
+#[derive(Clone, Copy)]
 pub struct OpenKing {
     row: isize,
     col: isize,
@@ -102,6 +107,7 @@ fn test_open_king() {
     assert_eq!(drain(OpenKing::new(6, -11)), &[(5, -12), (5, -11), (5, -10), (6, -12), (6, -10), (7, -12), (7, -11), (7, -10)]);
 }
 
+#[derive(Clone, Copy)]
 pub struct ClosedGrid {
     row: isize,
     col: isize,
@@ -140,6 +146,7 @@ fn test_closed_grid() {
     assert_eq!(drain(ClosedGrid::new(6, -11)), &[(5, -11), (6, -12), (6, -11), (6, -10), (7, -11)]);
 }
 
+#[derive(Clone, Copy)]
 pub struct OpenGrid {
     row: isize,
     col: isize,
@@ -177,6 +184,7 @@ fn test_open_grid() {
     assert_eq!(drain(OpenGrid::new(6, -11)), &[(5, -11), (6, -12), (6, -10), (7, -11)]);
 }
 
+#[derive(Clone, Copy)]
 pub struct ClosedTri {
     row: isize,
     col: isize,
@@ -217,6 +225,7 @@ fn test_closed_tri() {
     assert_eq!(drain(ClosedTri::new(6, -11)), &[(5, -12), (5, -11), (6, -12), (6, -11), (6, -10), (7, -11), (7, -10)]);
 }
 
+#[derive(Clone, Copy)]
 pub struct OpenTri {
     row: isize,
     col: isize,
@@ -256,6 +265,7 @@ fn test_open_tri() {
     assert_eq!(drain(OpenTri::new(6, -11)), &[(5, -12), (5, -11), (6, -12), (6, -10), (7, -11), (7, -10)]);
 }
 
+#[derive(Clone, Copy)]
 pub struct ClosedHex {
     row: isize,
     col: isize,
@@ -300,6 +310,7 @@ fn test_closed_hex() {
     assert_eq!(drain(ClosedHex::new(-3, -1)), &[(-4, -1), (-3, -2), (-3, -1), (-3, 0)]);
 }
 
+#[derive(Clone, Copy)]
 pub struct OpenHex {
     row: isize,
     col: isize,
@@ -343,6 +354,7 @@ fn test_open_hex() {
     assert_eq!(drain(OpenHex::new(-3, -1)), &[(-4, -1), (-3, -2), (-3, 0)]);
 }
 
+#[derive(Clone, Copy)]
 pub struct ClosedTMB {
     row: isize,
     col: isize,
@@ -391,6 +403,7 @@ fn test_closed_tmb() {
     assert_eq!(drain(ClosedTMB::new(1, -2)), &[(0, -3), (1, -2), (1, -1), (2, -2)]);
 }
 
+#[derive(Clone, Copy)]
 pub struct OpenTMB {
     row: isize,
     col: isize,
