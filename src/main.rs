@@ -1,10 +1,11 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::io::{self, BufRead, BufReader};
 use std::fs::File;
 use std::path::Path;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::cmp;
 
 mod util;
 mod adj;
@@ -493,16 +494,28 @@ impl Tessellation for GeometryTessellation {
 }
 
 #[derive(Default)]
+struct Lands {
+    closelands: Vec<(isize, isize)>,
+    farlands: Vec<(isize, isize)>,
+}
+
+#[derive(Default)]
 struct LowerBoundSearcher<'a, Codes>
 where Codes: Default
 {
     center: (isize, isize),
-    core: Rc<RefCell<BTreeSet<(isize, isize)>>>,
-    exterior: Rc<RefCell<BTreeSet<(isize, isize)>>>,
-    display: BTreeSet<(isize, isize)>,
+    closed_interior: Rc<RefCell<BTreeSet<(isize, isize)>>>, // everything up to radius 2
+    open_interior: Rc<RefCell<BTreeSet<(isize, isize)>>>,   // everything up to radius 2 except center
+    exterior: Rc<RefCell<BTreeSet<(isize, isize)>>>,        // everything at exactly radius 3
     detectors: BTreeSet<(isize, isize)>,
 
+    boundary_map: Rc<RefCell<BTreeMap<(isize, isize), Lands>>>, // maps a boundary point (exactly radius 2) to radius 2 around itself at radius 4 from center
+
+    averagees: RefCell<BTreeMap<(isize, isize), f64>>,
+    averagee_drops: Vec<(isize, isize)>,
+
     codes: Codes,
+
     highest: f64,
     thresh: f64,
     pipe: Option<&'a mut dyn io::Write>,
@@ -526,10 +539,9 @@ where Codes: codesets::Set<(isize, isize)>
     {
         Adj::new(pos.0, pos.1).filter(|p| self.detectors.contains(&p)).count()
     }
-    fn is_valid_over<Adj, T>(&mut self, range: T) -> bool
+    fn is_valid_over_append<Adj, T>(&mut self, range: T) -> bool
     where Adj: AdjacentIterator, T: Iterator<Item = (isize, isize)>
     {
-        self.codes.clear();
         for p in range {
             let is_detector = self.detectors.contains(&p);
             let code = self.get_locating_code::<Adj>(p);
@@ -539,6 +551,12 @@ where Codes: codesets::Set<(isize, isize)>
         }
         true
     }
+    fn is_valid_over<Adj, T>(&mut self, range: T) -> bool
+    where Adj: AdjacentIterator, T: Iterator<Item = (isize, isize)>
+    {
+        self.codes.clear();
+        self.is_valid_over_append::<Adj, _>(range)
+    }
     fn calc_share<Adj>(&self, pos: (isize, isize)) -> f64
     where Adj: AdjacentIterator
     {
@@ -546,10 +564,174 @@ where Codes: codesets::Set<(isize, isize)>
 
         let mut share = 0.0;
         for p in Adj::new(pos.0, pos.1) {
-            let c = self.get_locating_code_size::<Adj>(p);
+            let c = cmp::max(self.get_locating_code_size::<Adj>(p), Codes::MIN_DOM);
             share += 1.0 / c as f64;
         }
         share
+    }
+    fn calc_share_boundary_recursive<Adj, P>(&mut self, pos: (isize, isize), mut far_pos: P) -> f64
+    where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
+    {
+        // check the farlands position
+        match far_pos.next() {
+            // if no more far positions, check for third order validity
+            None => {
+                // if it's not valid this case was never possible in the first case - return -1 to show that this is ok so far
+                if !self.is_valid_over::<Adj, _>(self.closed_interior.clone().borrow().iter().copied()) {
+                    return -1.0;
+                }
+                if !self.is_valid_over_append::<Adj, _>(self.boundary_map.clone().borrow().get(&pos).unwrap().closelands.iter().copied()) {
+                    return -1.0;
+                }
+
+                // otherwise compute and return the share
+                return self.calc_share::<Adj>(pos);
+            }
+            // otherwise recurse on both branches at this position
+            Some(p) => {
+                self.detectors.insert(p);
+                let res1 = self.calc_share_boundary_recursive::<Adj, _>(pos, far_pos.clone());
+                if res1 > self.thresh {
+                    return res1; // if first branch is over thresh then max will be too - short circuit
+                }
+                self.detectors.remove(&p);
+                let res2 = self.calc_share_boundary_recursive::<Adj, _>(pos, far_pos);
+
+                // return whichever was larger
+                return if res1 >= res2 { res1 } else { res2 };
+            }
+        }
+    }
+    fn calc_share_boundary<Adj>(&mut self, pos: (isize, isize)) -> f64
+    where Adj: AdjacentIterator
+    {
+        let boundary_map = self.boundary_map.clone();
+        let boundary_map = boundary_map.borrow();
+        let lands = boundary_map.get(&pos).unwrap(); // this is done to ensure the boundary assertion even if trivial works
+
+        // attempt a trivial calculation, if no larger than thresh it's good enough
+        let trivial = self.calc_share::<Adj>(pos);
+        if trivial <= self.thresh {
+            return trivial;
+        }
+
+        // otherwise we need to recurse into farlands and check for third order validity
+        self.calc_share_boundary_recursive::<Adj, _>(pos, lands.farlands.iter().copied())
+    }
+    fn can_average_recursive<Adj, P>(&mut self, mut ext_pos: P) -> bool
+    where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
+    {
+        match ext_pos.next() {
+            // if we have no exterior position remaining, check for second order validity
+            None => {
+                // if it's not valid we need not consider this case - just return true to indicate it's still possible another configuration could work
+                if !self.is_valid_over::<Adj, _>(self.closed_interior.clone().borrow().iter().copied()) {
+                    return true;
+                }
+
+                {
+                    let mut averagees = self.averagees.borrow_mut();
+
+                    // go through averagees and compute share, take highest for each averagee, but if not less than thresh remove (not useful)
+                    self.averagee_drops.clear();
+                    for x in averagees.iter_mut() {
+                        let share = self.calc_share::<Adj>(*x.0);
+
+                        if share >= self.thresh {
+                            // drop it and its neighbors - this avoids recomputing neighborhood adjacent shares in logic below
+                            self.averagee_drops.extend(Adj::Closed::at(*x.0));
+                        }
+                        else if *x.1 < share {
+                            *x.1 = share;
+                        }
+                    }
+                    for x in &self.averagee_drops {
+                        averagees.remove(x);
+                    }
+                }
+
+                // grab the boundary detectors neighboring remaining averagees - collect into BTreeSet to avoid duplicates
+                let boundary_detectors: BTreeSet<_> = {
+                    let boundary_map = self.boundary_map.clone();
+                    let boundary_map = boundary_map.borrow();
+                    self.averagees.borrow().iter().flat_map(|x| Adj::Open::at(*x.0)).filter(|x| self.detectors.contains(&x) && boundary_map.contains_key(&x)).collect()
+                };
+
+                // for each boundary detector
+                for p in boundary_detectors.into_iter() {
+                    // if we don't neighbor an averagee, skip it (short circuiting from previous averagee removal - see below)
+                    {
+                        let averagees = self.averagees.borrow();
+                        if !Adj::Open::at(p).any(|x| averagees.contains_key(&x)) {
+                            continue;
+                        }
+                    }
+                    
+                    // compute its share with farlands extended constraints
+                    let share = self.calc_share_boundary::<Adj>(p);
+
+                    // if it's strictly greater than thresh we can't use any of p's neighbors
+                    if share > self.thresh {
+                        let mut averagees = self.averagees.borrow_mut();
+                        for x in Adj::Open::at(p) {
+                            averagees.remove(&x);
+                        }
+                    }
+                }
+
+                // only return false if we no longer have any valid averagees
+                return !self.averagees.borrow().is_empty();
+            }
+            // otherwise recurse on both branches at this position
+            Some(p) => {
+                self.detectors.insert(p);
+                if !self.can_average_recursive::<Adj, _>(ext_pos.clone()) {
+                    return false;
+                }
+                self.detectors.remove(&p);
+                return self.can_average_recursive::<Adj, _>(ext_pos);
+            }
+        }
+    }
+    fn can_average<Adj>(&mut self, center_share: f64) -> Option<f64>
+    where Adj: AdjacentIterator
+    {
+        let exterior = self.exterior.clone();
+
+        // set open neighbors which are detectors as possible averagees
+        {
+            let mut averagees = self.averagees.borrow_mut();
+            averagees.clear();
+            averagees.extend(Adj::Open::at(self.center).filter(|p| self.detectors.contains(p)).map(|p| (p, -1.0)));
+        }
+
+        // perform the search
+        if !self.can_average_recursive::<Adj, _>(exterior.borrow().iter().copied()) {
+            return None;
+        }
+
+        let avg = {
+            let averagees = self.averagees.borrow();
+            assert!(!averagees.is_empty());
+
+            // if any of the averagees is still negative then there were no legal second order configurations, which means this case was impossible in the first place
+            for x in averagees.iter() {
+                if *x.1 < 0.0 {
+                    return Some(0.0) // return an average share of 0, which will always be within thresh
+                }
+            }
+
+            // compute the average of center and averagees
+            (center_share + averagees.values().copied().sum::<f64>()) / (averagees.len() + 1) as f64
+        };
+
+        // if it was within thresh, return it - otherwise indicate failure to resolve
+        if avg <= self.thresh {
+            Some(avg)
+        }
+        else {
+            None
+        }
     }
     fn calc_recursive<Adj, P>(&mut self, mut pos: P)
     where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
@@ -557,23 +739,38 @@ where Codes: codesets::Set<(isize, isize)>
         match pos.next() {
             // if we have no positions remaining, check for first order validity
             None => {
-                if self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center)) {
-                    let share = self.calc_share::<Adj>(self.center);
-                    if self.highest < share {
-                        self.highest = share;
+                // if not valid on first order, ignore
+                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center)) {
+                    return;
+                }
+
+                // compute share of center
+                let mut share = self.calc_share::<Adj>(self.center);
+                
+                // if share is over thresh, attempt to perform averaging - on success update share to reflect average
+                if share > self.thresh {
+                    match self.can_average::<Adj>(share) {
+                        Some(avg) => share = avg,
+                        None => (),
                     }
-                    if share > self.thresh {
-                        match self.pipe {
-                            Some(ref mut f) => {
-                                let geo = Geometry::for_printing(&self.display, &self.detectors);
-                                writeln!(f, "problem: {}\ncenter: {:?}\n{}", share, self.center, geo).unwrap();
-                            }
-                            None => (),
-                        };
+                }
+
+                // take the max (average) share
+                if self.highest < share {
+                    self.highest = share;
+                }
+                // if it was over thresh, display as problem case
+                if share > self.thresh {
+                    match self.pipe {
+                        Some(ref mut f) => {
+                            let geo = Geometry::for_printing(&*self.closed_interior.clone().borrow(), &self.detectors);
+                            writeln!(f, "problem: {}\ncenter: {:?}\n{}", share, self.center, geo).unwrap();
+                        }
+                        None => (),
                     }
                 }
             }
-            // otherwise recurse on both branches
+            // otherwise recurse on both branches at this position
             Some(p) => {
                 self.detectors.insert(p);
                 self.calc_recursive::<Adj, _>(pos.clone());
@@ -585,8 +782,10 @@ where Codes: codesets::Set<(isize, isize)>
     fn calc<Adj>(&mut self, thresh: f64, pipe: Option<&'a mut dyn io::Write>, centers: &[(isize, isize)]) -> ((usize, usize), f64)
     where Adj: AdjacentIterator
     {
-        let core = self.core.clone();
+        let closed_interior = self.closed_interior.clone();
+        let open_interior = self.open_interior.clone();
         let exterior = self.exterior.clone();
+        let boundary_map = self.boundary_map.clone();
 
         // prepare shared search state before starting
         self.highest = 0.0;
@@ -598,27 +797,62 @@ where Codes: codesets::Set<(isize, isize)>
             // set the center
             self.center = *c;
 
-            // generate display - everything up to radius 2
-            self.display.clear();
-            self.display.extend(Adj::Open::at(*c).flat_map(|p| Adj::Closed::at(p)));
-
-            // generate core - everything up to radius 2 except the center (basically display minus center)
+            // generate closed interior - everything up to radius 2
             {
-                let mut core = core.borrow_mut();
-                core.clone_from(&self.display);
-                core.remove(c);
+                let mut closed_interior = closed_interior.borrow_mut();
+                closed_interior.clear();
+                closed_interior.extend(Adj::Open::at(*c).flat_map(|p| Adj::Closed::at(p)));
             }
 
-            // generate exterior - everything at exactly radius 3 (excluding center and core)
+            // generate open interior - everything up to radius 2 except the center
+            {
+                let mut open_interior = open_interior.borrow_mut();
+                let closed_interior = closed_interior.borrow();
+                open_interior.clone_from(&*closed_interior);
+                open_interior.remove(c);
+            }
+
+            // generate exterior - everything at exactly radius 3 (excluding closed interior)
             {
                 let mut exterior = exterior.borrow_mut();
-                let core = core.borrow();
+                let closed_interior = closed_interior.borrow();
+                let open_interior = open_interior.borrow();
                 exterior.clear();
-                exterior.extend(core.iter().flat_map(|p| Adj::Open::at(*p)));
-                for p in core.iter() {
+                exterior.extend(open_interior.iter().flat_map(|p| Adj::Open::at(*p)));
+                for p in closed_interior.iter() {
                     exterior.remove(p);
                 }
-                exterior.remove(c);
+            }
+
+            // generate farlands - everything at exactly radius 4
+            let farlands = {
+                let mut farlands: BTreeSet<(isize, isize)> = Default::default();
+                let exterior = exterior.borrow();
+                let open_interior = open_interior.borrow();
+                farlands.clear();
+                farlands.extend(exterior.iter().flat_map(|p| Adj::Open::at(*p)));
+                for p in open_interior.iter() {
+                    farlands.remove(p);
+                }
+                farlands
+            };
+
+            // generate boundary map - maps interior boundary to farlands intersection within radius 2 of itself
+            {
+                let mut boundary_map = boundary_map.borrow_mut();
+                let open_interior = open_interior.borrow();
+                let exterior = exterior.borrow();
+                boundary_map.clear();
+                for &p in open_interior.iter().filter(|&p| Adj::Open::at(*p).any(|x| exterior.contains(&x))) {
+                    let close: BTreeSet<_> = Adj::Open::at(p).filter(|x| !open_interior.contains(x)).collect();
+                    let far: BTreeSet<_> = close.iter().flat_map(|x| Adj::Open::at(*x)).filter(|x| farlands.contains(x)).collect();
+
+                    let lands = Lands {
+                        closelands: close.into_iter().collect(),
+                        farlands: far.into_iter().collect(),
+                    };
+                    boundary_map.insert(p, lands);
+                }
             }
 
             // each pass starts with no detectors except the center
@@ -626,7 +860,7 @@ where Codes: codesets::Set<(isize, isize)>
             self.detectors.insert(*c);
 
             // perform center folding
-            self.calc_recursive::<Adj, _>(core.borrow().iter().copied());
+            self.calc_recursive::<Adj, _>(open_interior.borrow().iter().copied());
         }
 
         // lcm(1..=9) = 2520, so multiply and divide by 2520 to create an exact fractional representation

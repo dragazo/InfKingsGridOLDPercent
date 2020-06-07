@@ -1,18 +1,23 @@
 use std::collections::BTreeSet;
+use std::fmt::Debug;
 
 use crate::util;
 
-pub trait Set<T>: Default {
+pub trait Set<T>: Default + Clone + Debug + PartialEq {
+    const MIN_DOM: usize;
+
     fn clear(&mut self);
     fn can_add(&self, is_detector: bool, code: &Vec<T>) -> bool;
     fn add(&mut self, is_detector: bool, code: Vec<T>) -> bool;
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct DOM<T>(std::marker::PhantomData<T>);
 impl<T> Set<T> for DOM<T>
-where T: Ord + Default
+where T: Ord + Default + Clone + Debug
 {
+    const MIN_DOM: usize = 1;
+
     fn clear(&mut self) {}
     fn can_add(&self, _is_detector: bool, code: &Vec<T>) -> bool {
         !code.is_empty()
@@ -22,11 +27,13 @@ where T: Ord + Default
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct EDOM<T>(std::marker::PhantomData<T>);
 impl<T> Set<T> for EDOM<T>
-where T: Ord + Default
+where T: Ord + Default + Clone + Debug
 {
+    const MIN_DOM: usize = 1;
+
     fn clear(&mut self) {}
     fn can_add(&self, _is_detector: bool, code: &Vec<T>) -> bool {
         code.len() == 1
@@ -36,15 +43,17 @@ where T: Ord + Default
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct LD<T>
-where T: Ord + Default
+where T: Ord
 {
     codes: BTreeSet<Vec<T>>,
 }
 impl<T> Set<T> for LD<T>
-where T: Ord + Default
+where T: Ord + Default + Clone + Debug
 {
+    const MIN_DOM: usize = 1;
+
     fn clear(&mut self) {
         self.codes.clear();
     }
@@ -62,15 +71,17 @@ where T: Ord + Default
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct OLD<T>
-where T: Ord + Default
+where T: Ord
 {
     codes: BTreeSet<Vec<T>>,
 }
 impl<T> Set<T> for OLD<T>
-where T: Ord + Default
+where T: Ord + Default + Clone + Debug
 {
+    const MIN_DOM: usize = 1;
+
     fn clear(&mut self) {
         self.codes.clear();
     }
@@ -86,13 +97,15 @@ where T: Ord + Default
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct RED<T> {
     codes: Vec<Vec<T>>,
 }
 impl<T> Set<T> for RED<T>
-where T: Ord + Default
+where T: Ord + Default + Clone + Debug
 {
+    const MIN_DOM: usize = 2;
+
     fn clear(&mut self) {
         self.codes.clear();
     }
@@ -115,13 +128,15 @@ where T: Ord + Default
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct DET<T> {
     codes: Vec<Vec<T>>,
 }
 impl<T> Set<T> for DET<T>
-where T: Ord + Default
+where T: Ord + Default + Clone + Debug
 {
+    const MIN_DOM: usize = 2;
+
     fn clear(&mut self) {
         self.codes.clear();
     }
@@ -144,13 +159,15 @@ where T: Ord + Default
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct ERR<T> {
     codes: Vec<Vec<T>>,
 }
 impl<T> Set<T> for ERR<T>
-where T: Ord + Default
+where T: Ord + Default + Clone + Debug
 {
+    const MIN_DOM: usize = 3;
+
     fn clear(&mut self) {
         self.codes.clear();
     }
