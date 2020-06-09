@@ -7,6 +7,9 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::cmp;
 
+#[macro_use]
+extern crate more_asserts;
+
 mod util;
 mod adj;
 mod codesets;
@@ -178,8 +181,8 @@ impl fmt::Display for RectTessellation {
 }
 impl RectTessellation {
     fn new(rows: usize, cols: usize) -> Self {
-        assert!(rows >= 2);
-        assert!(cols >= 2);
+        assert_ge!(rows, 2);
+        assert_ge!(cols, 2);
 
         RectTessellation {
             rows, cols,
@@ -543,9 +546,10 @@ where Codes: codesets::Set<(isize, isize)>
     {
         Adj::new(pos.0, pos.1).filter(|p| self.detectors.contains(&p)).count()
     }
-    fn is_valid_over_append<Adj, T>(&mut self, range: T) -> bool
+    fn is_valid_over<Adj, T>(&mut self, range: T) -> bool
     where Adj: AdjacentIterator, T: Iterator<Item = (isize, isize)>
     {
+        self.codes.clear();
         for p in range {
             let is_detector = self.detectors.contains(&p);
             let code = self.get_locating_code::<Adj>(p);
@@ -554,12 +558,6 @@ where Codes: codesets::Set<(isize, isize)>
             }
         }
         true
-    }
-    fn is_valid_over<Adj, T>(&mut self, range: T) -> bool
-    where Adj: AdjacentIterator, T: Iterator<Item = (isize, isize)>
-    {
-        self.codes.clear();
-        self.is_valid_over_append::<Adj, _>(range)
     }
     fn calc_share<Adj>(&self, pos: (isize, isize)) -> f64
     where Adj: AdjacentIterator
@@ -579,8 +577,8 @@ where Codes: codesets::Set<(isize, isize)>
         match far_pos.next() {
             None => {
                 // if not valid don't even bother
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center)) || !self.is_valid_over_append::<Adj, _>(lands.peers.iter().chain(lands.inner_close.iter()).copied()) {
-                    return -1.0; // invlaid config has no share - return invalid value
+                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center).chain(lands.peers.iter().chain(lands.inner_close.iter()).copied())) {
+                    return -1.0; // invalid config has no share - return invalid value
                 }
 
                 // otherwise return the share
@@ -606,7 +604,7 @@ where Codes: codesets::Set<(isize, isize)>
         match ext_pos.next() {
             None => {
                 // if it's not valid don't even bother inspecting further
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center)) || !self.is_valid_over_append::<Adj, _>(lands.peers.iter().copied()) {
+                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center).chain(lands.peers.iter().copied())) {
                     return -1.0; // return -1 to denote no share (illegal config)
                 }
 
@@ -627,7 +625,7 @@ where Codes: codesets::Set<(isize, isize)>
             }
         }
     }
-    fn calc_share_boundary<Adj>(&mut self, pos: (isize, isize)) -> Option<f64>
+    fn calc_share_boundary<Adj>(&mut self, pos: (isize, isize)) -> f64
     where Adj: AdjacentIterator
     {
         let boundary_map = self.boundary_map.clone();
@@ -635,10 +633,7 @@ where Codes: codesets::Set<(isize, isize)>
         let lands = boundary_map.get(&pos).unwrap();
 
         // compute the max share recursively
-        let res = self.calc_share_boundary_recursive::<Adj, _>(pos, lands, lands.outer_close.iter().copied());
-
-        // if it's valid and no larger than thresh, use it - otherwise nothing (== included for caller logic)
-        if res >= 0.0 && res <= self.thresh { Some(res) } else { None }
+        self.calc_share_boundary_recursive::<Adj, _>(pos, lands, lands.outer_close.iter().copied())
     }
     // checks neighbor for averaging validity - returns x where x is either -1 (impossible config), max share of neighbor (<= thresh), or some undefined value > thresh
     fn calc_share_neighbor_recursive<Adj, P>(&mut self, neighbor: (isize, isize), lands: &NeighborLands, mut ext_pos: P) -> f64
@@ -647,7 +642,7 @@ where Codes: codesets::Set<(isize, isize)>
         match ext_pos.next() {
             None => {
                 // if it's an invalid configuration, don't even bother looking at it
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center)) || !self.is_valid_over_append::<Adj, _>(lands.inner_close.iter().copied()){
+                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center).chain(lands.inner_close.iter().copied())) {
                     return -1.0; // return -1 to denote nothing (no share here at all)
                 }
                 
@@ -669,18 +664,15 @@ where Codes: codesets::Set<(isize, isize)>
         }
     }
     // returns Some(x) where x is a valid max share of neighbor <= thresh, otherwise None
-    fn calc_share_neighbor<Adj>(&mut self, neighbor: (isize, isize)) -> Option<f64>
+    fn calc_share_neighbor<Adj>(&mut self, neighbor: (isize, isize)) -> f64
     where Adj: AdjacentIterator
     {
         let neighbor_map = self.neighbor_map.clone();
         let neighbor_map = neighbor_map.borrow();
         let lands = neighbor_map.get(&neighbor).unwrap();
 
-        // compute max share of neighbor
-        let sh = self.calc_share_neighbor_recursive::<Adj, _>(neighbor, lands, lands.far.iter().copied());
-
-        // if it's valid and no larger than thresh it's an average candidate (== included as valid for caller's logic)
-        if sh >= 0.0 && sh <= self.thresh { Some(sh) } else { None }
+        // compute with recursive helper
+        self.calc_share_neighbor_recursive::<Adj, _>(neighbor, lands, lands.far.iter().copied())
     }
     fn can_average<Adj>(&mut self, center_share: f64) -> Option<f64>
     where Adj: AdjacentIterator
@@ -694,27 +686,18 @@ where Codes: codesets::Set<(isize, isize)>
 
         // go through the neighbors and find all the valid average candidates
         for neighbor in neighbors.iter_mut() {
-            // if this neighbor is already a drop, don't even bother
-            if averagee_drops.contains(neighbor.0) {
+            // if this detector neighbor and its detector neighbors which are open neighbors of center are all already dropped, don't even bother
+            if Adj::Closed::at(*neighbor.0).filter(|p| neighbor_map.contains_key(&p) && self.detectors.contains(p)).all(|p| averagee_drops.contains(&p)) {
                 continue;
             }
 
             // otherwise find neighbor max share
             match self.calc_share_neighbor::<Adj>(*neighbor.0) {
-                Some(sh) => {
-                    assert!(sh >= 0.0 && sh <= self.thresh); // assert this to make sure helper function did its job properly
-
-                    // if strictly less than thresh, update
-                    if sh < self.thresh {
-                        *neighbor.1 = sh;
-                    }
-                    // otherwise drop ourselves but not neighbors (we're not useful but also not problematic)
-                    else {
-                        averagee_drops.insert(*neighbor.0);
-                    }
-                }
-                // otherwise we're strictly greater than thresh - problematic - drop ourself and our neighbors as valid candidates
-                None => averagee_drops.extend(Adj::Closed::at(*neighbor.0)),
+                x if x.is_nan() || x.is_infinite() => panic!("invalid neighbor share: {}", x),
+                x if x < 0.0 => return Some(0.0), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
+                x if x < self.thresh => *neighbor.1 = x, // if strictly less than thresh update map value
+                x if x == self.thresh => { averagee_drops.insert(*neighbor.0); }, // if equal to thresh drop ourself but not neighbors (we're not useful but also not problematic)
+                _ => averagee_drops.extend(Adj::Closed::at(*neighbor.0)), // if higher than thresh drop ourself and our neighbors (we're problematic)
             }
         }
         // remove all failed candidates
@@ -724,10 +707,11 @@ where Codes: codesets::Set<(isize, isize)>
 
         // gather up all the valid averagees and sort by ascending share (use position to break ties just to guarantee invariant exec order)
         let mut averagees: Vec<(f64, (isize, isize))> = neighbors.into_iter().map(|(a, b)| (b, a)).collect();
+        assert!(averagees.iter().all(|(sh, _)| *sh >= 0.0 && *sh < self.thresh));
         averagees.sort_by(|x, y| x.partial_cmp(y).unwrap());
 
         // keep a running track of the boundary share results
-        let mut tested_boundaries: BTreeMap<(isize, isize), Option<f64>> = Default::default();
+        let mut tested_boundaries: BTreeMap<(isize, isize), f64> = Default::default();
         
         // go through the averagees and compute running average
         let mut sum = center_share;
@@ -741,12 +725,12 @@ where Codes: codesets::Set<(isize, isize)>
                 }
 
                 // compute share of boundary point if we haven't already done so
-                let boundary_share = tested_boundaries.entry(*boundary_pos).or_insert_with(|| self.calc_share_boundary::<Adj>(*boundary_pos));
-
-                // if it was invalid for average argument (> thresh) then it's no good
+                let boundary_share = *tested_boundaries.entry(*boundary_pos).or_insert_with(|| self.calc_share_boundary::<Adj>(*boundary_pos));
                 match boundary_share {
-                    Some(x) => assert!(*x >= 0.0 && *x <= self.thresh), // this should be guaranteed by internal logic in helper functions
-                    None => continue 'average_loop, // on to the next averagee
+                    x if x.is_nan() || x.is_infinite() => panic!("invalid boundary share: {}", x),
+                    x if x < 0.0 => return Some(0.0), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
+                    x if x <= self.thresh => (), // if no larger than thesh then we're ok so far
+                    _ => continue 'average_loop, // otherwise larger than thresh, so we can't use this averagee - on to the next
                 }
             }
 
@@ -781,7 +765,14 @@ where Codes: codesets::Set<(isize, isize)>
                 // compute average share - if share is over thresh, attempt to perform averaging, otherwise just use same value
                 let avg_share = {
                     if share > self.thresh {
-                        self.can_average::<Adj>(share).unwrap_or(share)
+                        match self.can_average::<Adj>(share) {
+                            Some(avg) => {
+                                assert_ge!(avg, 0.0);
+                                assert_le!(avg, self.thresh);
+                                avg
+                            }
+                            None => share,
+                        }
                     }
                     else { share }
                 };
@@ -794,9 +785,14 @@ where Codes: codesets::Set<(isize, isize)>
                 // if it was over thresh, display as problem case
                 if avg_share > self.thresh {
                     match self.pipe {
-                        Some(ref mut f) => {
+                        Some(ref mut _f) => {
                             let geo = Geometry::for_printing(&*self.closed_interior.clone().borrow(), &self.detectors);
-                            writeln!(f, "problem: {} (avg {}) (center {:?})\n{}", share, avg_share, self.center, geo).unwrap();
+                            let msg = format!("problem: {} (avg {}) (center {:?})\n{}", share, avg_share, self.center, geo);
+
+                            #[cfg(test)]
+                            println!("{}", msg);
+                            #[cfg(not(test))]
+                            writeln!(_f, "{}", msg).unwrap();
                         }
                         None => (),
                     }
@@ -930,6 +926,93 @@ where Codes: codesets::Set<(isize, isize)>
         Default::default()
     }
 }
+
+#[test]
+fn test_lower_bound_searcher_sq_old_optimal() {
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(2.50001, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.400001);
+    assert_gt!(res.1, 0.399999);
+    assert_eq!(res.0, (2, 5)); // we can find exact solution
+}
+#[test]
+fn test_lower_bound_searcher_sq_old_suboptimal() {
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(2.49999, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.400001);
+    assert_gt!(res.1, 0.399999);
+    assert_eq!(res.0, (2, 5)); // we can find exact solution (no averaging required)
+}
+
+#[test]
+fn test_lower_bound_searcher_tri_old_optimal() {
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(3.250001, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.3076924); // we don't find exact, but must be less than proven lower bound
+}
+#[test]
+fn test_lower_bound_searcher_tri_old_suboptimal() {
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(3.249999, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.3076923);
+    assert_ne!(res.0, (4, 13)); // averaging is required so this will be suboptimal
+}
+
+#[test]
+fn test_lower_bound_searcher_tri_det_optimal() {
+    let res = LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(2.000001, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.50001);
+    assert_gt!(res.1, 0.49999);
+    assert_eq!(res.0, (1, 2)); // we can find exact solution
+}
+#[test]
+fn test_lower_bound_searcher_tri_det_suboptimal() {
+    let res = LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(1.999999, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.49999);
+    assert_ne!(res.0, (1, 2)); // averaging is required so this will be suboptimal
+}
+
+#[test]
+fn test_lower_bound_searcher_hex_old_high_share() {
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(1000.0, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.50001);
+    assert_gt!(res.1, 0.49999);
+    assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
+}
+#[test]
+fn test_lower_bound_searcher_hex_old_optimal() {
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(2.000001, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.50001);
+    assert_gt!(res.1, 0.39999);
+    assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
+}
+#[test]
+fn test_lower_bound_searcher_hex_old_suboptimal() {
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(1.999999, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.50001);
+    assert_gt!(res.1, 0.49999);
+    assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
+}
+
+
+
+
+
+
+// these suboptimal test case has problems (might be due to LD set constraints being incorrect)
+#[test]
+fn test_lower_bound_searcher_king_ld_optimal() {
+    let res = LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenKing>(5.000001, None, &[(0, 0)]);
+    assert_lt!(res.1, 0.20001);
+    assert_gt!(res.1, 0.19999);
+    assert_eq!(res.0, (1, 5)); // we can find exact solution
+}
+// #[test]
+// fn test_lower_bound_searcher_king_ld_suboptimal() {
+//     let res = LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenKing>(4.99999, None, &[(0, 0)]);
+//     assert_lt!(res.1, 0.19999);
+// }
+
+
+
+
+
 
 struct FiniteGraphSolver<'a, Codes> {
     verts: &'a [Vertex],
@@ -1258,53 +1341,53 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, goal: &str) {
 fn theo_helper(mode: &str, thresh: &str) {
     let thresh = parse_share(thresh);
     let ((n, k), f) = match mode {
-        "dom:king" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "odom:king" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "ld:king" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "ic:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "redic:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "detic:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "erric:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "old:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "red:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "det:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "err:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
+        "dom:king" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "odom:king" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "ld:king" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "ic:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "redic:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "detic:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "erric:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "old:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "red:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "det:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "err:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
 
-        "dom:tri" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "odom:tri" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "ld:tri" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "ic:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "redic:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "detic:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "erric:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "old:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "red:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "det:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "err:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
+        "dom:tri" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "odom:tri" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "ld:tri" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "ic:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "redic:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "detic:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "erric:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "old:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "red:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "det:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "err:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
 
-        "dom:grid" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "odom:grid" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "ld:grid" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "ic:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "redic:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "detic:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "erric:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "old:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "red:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "det:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "err:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
+        "dom:grid" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "odom:grid" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "ld:grid" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "ic:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "redic:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "detic:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "erric:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "old:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "red:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "det:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "err:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
 
-        "dom:hex" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "odom:hex" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "ld:hex" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "ic:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "redic:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "detic:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "erric:hex" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "old:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "red:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "det:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
-        "err:hex" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout().lock()), &[(0, 0)]),
+        "dom:hex" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "odom:hex" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "ld:hex" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "ic:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "redic:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "detic:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "erric:hex" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "old:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "red:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "det:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+        "err:hex" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
 
         _ => {
             eprintln!("unknown type: {}", mode);
