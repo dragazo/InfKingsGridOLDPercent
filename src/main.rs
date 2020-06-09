@@ -807,8 +807,7 @@ where Codes: codesets::Set<(isize, isize)>
             // generate open interior - everything up to radius 2 except the center
             {
                 let mut open_interior = open_interior.borrow_mut();
-                let closed_interior = closed_interior.borrow();
-                open_interior.clone_from(&*closed_interior);
+                open_interior.clone_from(&*closed_interior.borrow());
                 open_interior.remove(c);
             }
 
@@ -816,25 +815,15 @@ where Codes: codesets::Set<(isize, isize)>
             {
                 let mut exterior = exterior.borrow_mut();
                 let closed_interior = closed_interior.borrow();
-                let open_interior = open_interior.borrow();
                 exterior.clear();
-                exterior.extend(open_interior.iter().flat_map(|p| Adj::Open::at(*p)));
-                for p in closed_interior.iter() {
-                    exterior.remove(p);
-                }
+                exterior.extend(open_interior.borrow().iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p)));
             }
 
             // generate farlands - everything at exactly radius 4
-            let farlands = {
-                let mut farlands: BTreeSet<(isize, isize)> = Default::default();
+            let farlands: BTreeSet<(isize, isize)> = {
+                let closed_interior = closed_interior.borrow();
                 let exterior = exterior.borrow();
-                let open_interior = open_interior.borrow();
-                farlands.clear();
-                farlands.extend(exterior.iter().flat_map(|p| Adj::Open::at(*p)));
-                for p in open_interior.iter() {
-                    farlands.remove(p);
-                }
-                farlands
+                exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p) && !exterior.contains(p)).collect()
             };
 
             // generate boundary map - maps interior boundary to farlands intersection within radius 2 of itself
