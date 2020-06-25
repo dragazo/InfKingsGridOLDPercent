@@ -1045,18 +1045,28 @@ fn test_lower_bound_searcher_hex_old_suboptimal() {
     assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
 }
 
+#[derive(Debug)]
+enum AdjType {
+    Open, Closed
+}
+
 struct FiniteGraphSolver<'a, Codes> {
     verts: &'a [Vertex],
     detectors: &'a mut HashSet<usize>,
     needed: usize,
     codes: Codes,
+    adj_type: AdjType,
 }
 impl<Codes> FiniteGraphSolver<'_, Codes>
 where Codes: codesets::Set<usize>
 {
     fn get_locating_code(&self, p: usize) -> Vec<usize> {
         let mut v = Vec::with_capacity(9);
-        for x in &self.verts[p].adj {
+        let adj = match self.adj_type {
+            AdjType::Open => self.verts[p].open_adj.iter(),
+            AdjType::Closed => self.verts[p].closed_adj.iter(),
+        };
+        for x in adj {
             if self.detectors.contains(x) {
                 v.push(*x);
             }
@@ -1091,9 +1101,10 @@ where Codes: codesets::Set<usize>
 
         false
     }
-    fn find_solution(&mut self, n: usize) -> bool {
+    fn find_solution(&mut self, n: usize, adj_type: AdjType) -> bool {
         self.detectors.clear();
         self.needed = n;
+        self.adj_type = adj_type;
         self.find_solution_recursive(0)
     }
 }
@@ -1104,7 +1115,8 @@ enum GraphLoadError {
 }
 struct Vertex {
     label: String,
-    adj: Vec<usize>,
+    open_adj: Vec<usize>,
+    closed_adj: Vec<usize>,
 }
 struct FiniteGraph {
     verts: Vec<Vertex>,
@@ -1165,10 +1177,14 @@ impl FiniteGraph {
         }
 
         let mut verts: Vec<Vertex> = Vec::with_capacity(v.len());
-        for i in v {
+        for (i, mut vert) in v.into_iter().enumerate() {
+            let open_adj = vert.adj.iter().copied().collect();
+            vert.adj.insert(i);
+            let closed_adj = vert.adj.iter().copied().collect();
             verts.push(Vertex {
-                label: i.label,
-                adj: i.adj.into_iter().collect(),
+                label: vert.label,
+                open_adj,
+                closed_adj,
             });
         }
         Ok(FiniteGraph {
@@ -1184,6 +1200,7 @@ impl FiniteGraph {
             detectors: &mut self.detectors,
             needed: 0,
             codes: Default::default(),
+            adj_type: AdjType::Open,
         }
     }
     fn get_solution(&self) -> Vec<&str> {
@@ -1412,16 +1429,29 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy) {
     };
     println!("found theo lower bound {}/{} ({})", n, k, f);
 }
-fn finite_helper(mut g: FiniteGraph, mode: &str, count: usize) {
-    let success = match mode {
-        "odom" => g.solver::<codesets::DOM<usize>>().find_solution(count),
-        "old" => g.solver::<codesets::OLD<usize>>().find_solution(count),
-        "red" => g.solver::<codesets::RED<usize>>().find_solution(count),
-        "det" => g.solver::<codesets::DET<usize>>().find_solution(count),
-        "err" => g.solver::<codesets::ERR<usize>>().find_solution(count),
+fn finite_helper(mut g: FiniteGraph, set: &str, count: usize) {
+    macro_rules! calc {
+        ($t:ident, $m:ident) => {
+            g.solver::<codesets::$t<usize>>().find_solution(count, AdjType::$m)
+        }
+    }
 
+    let success = match set {
+        "dom" => calc!(DOM, Closed),
+        "odom" => calc!(DOM, Open),
+        "edom" => calc!(EDOM, Closed),
+        "eodom" => calc!(EDOM, Open),
+        "ld" => calc!(LD, Open),
+        "ic" => calc!(OLD, Closed),
+        "red:ic" => calc!(RED, Closed),
+        "det:ic" => calc!(DET, Closed),
+        "err:ic" => calc!(ERR, Closed),
+        "old" => calc!(OLD, Open),
+        "red:old" => calc!(RED, Open),
+        "det:old" => calc!(DET, Open),
+        "err:old" => calc!(ERR, Open),
         _ => {
-            eprintln!("unknown type: {}", mode);
+            eprintln!("unknown set: {}", set);
             std::process::exit(4);
         }
     };
