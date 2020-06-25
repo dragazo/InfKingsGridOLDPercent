@@ -22,6 +22,8 @@ pub trait AdjacentIterator: Iterator<Item = (isize, isize)> + Clone {
     fn at(pos: (isize, isize)) -> Self {
         Self::new(pos.0, pos.1)
     }
+
+    const CLASSES: &'static [(isize, isize)];
 }
 
 // some logic might require open/closed so have a special tag for them to use for trait bounds
@@ -41,6 +43,8 @@ impl AdjacentIterator for ClosedKing {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
 }
 impl Iterator for ClosedKing {
     type Item = (isize, isize);
@@ -81,6 +85,8 @@ impl AdjacentIterator for OpenKing {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
 }
 impl Iterator for OpenKing {
     type Item = (isize, isize);
@@ -120,6 +126,8 @@ impl AdjacentIterator for ClosedGrid {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
 }
 impl Iterator for ClosedGrid {
     type Item = (isize, isize);
@@ -159,6 +167,8 @@ impl AdjacentIterator for OpenGrid {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
 }
 impl Iterator for OpenGrid {
     type Item = (isize, isize);
@@ -197,6 +207,8 @@ impl AdjacentIterator for ClosedTri {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
 }
 impl Iterator for ClosedTri {
     type Item = (isize, isize);
@@ -238,6 +250,8 @@ impl AdjacentIterator for OpenTri {
     fn new(row: isize, col: isize) -> Self {
         Self { row, col, state: 0 }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
 }
 impl Iterator for OpenTri {
     type Item = (isize, isize);
@@ -281,6 +295,8 @@ impl AdjacentIterator for ClosedHex {
             state: if (row + col) % 2 == 0 { 0 } else { 5 },
         }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
 }
 impl Iterator for ClosedHex {
     type Item = (isize, isize);
@@ -326,6 +342,8 @@ impl AdjacentIterator for OpenHex {
             state: if (row + col) % 2 == 0 { 0 } else { 4 },
         }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
 }
 impl Iterator for OpenHex {
     type Item = (isize, isize);
@@ -370,6 +388,8 @@ impl AdjacentIterator for ClosedTMB {
             state: [0, 8, 13][util::modulus(row + col, 3)],
         }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0), (0, 1), (0, 2)];
 }
 impl Iterator for ClosedTMB {
     type Item = (isize, isize);
@@ -419,6 +439,8 @@ impl AdjacentIterator for OpenTMB {
             state: [0, 7, 11][util::modulus(row + col, 3)],
         }
     }
+
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0), (0, 1), (0, 2)];
 }
 impl Iterator for OpenTMB {
     type Item = (isize, isize);

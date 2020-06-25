@@ -509,6 +509,24 @@ struct NeighborLands {
     far: Vec<(isize, isize)>,
 }
 
+#[derive(Debug, PartialEq)]
+enum TheoStrategy {
+    NoAveraging,
+    AverageWithNeighbors,
+}
+impl Default for TheoStrategy {
+    fn default() -> Self {
+        TheoStrategy::NoAveraging
+    }
+}
+
+#[derive(PartialEq, PartialOrd, Eq, Ord)]
+struct LowerBoundProblem {
+    center: (isize, isize),
+    share: ordered_float::OrderedFloat<f64>,
+    structure: String,
+}
+
 #[derive(Default)]
 struct LowerBoundSearcher<'a, Codes>
 where Codes: Default
@@ -526,6 +544,8 @@ where Codes: Default
     highest: f64,
     thresh: f64,
     pipe: Option<&'a mut dyn io::Write>,
+    problems: BTreeSet<LowerBoundProblem>,
+    strategy: TheoStrategy,
 }
 impl<'a, Codes> LowerBoundSearcher<'a, Codes>
 where Codes: codesets::Set<(isize, isize)>
@@ -764,7 +784,7 @@ where Codes: codesets::Set<(isize, isize)>
                 
                 // compute average share - if share is over thresh, attempt to perform averaging, otherwise just use same value
                 let avg_share = {
-                    if share > self.thresh {
+                    if share > self.thresh && self.strategy != TheoStrategy::NoAveraging {
                         match self.can_average::<Adj>(share) {
                             Some(avg) => {
                                 assert_ge!(avg, 0.0);
@@ -785,14 +805,23 @@ where Codes: codesets::Set<(isize, isize)>
                 // if it was over thresh, display as problem case
                 if avg_share > self.thresh {
                     match self.pipe {
-                        Some(ref mut _f) => {
-                            let geo = Geometry::for_printing(&*self.closed_interior.clone().borrow(), &self.detectors);
-                            let msg = format!("problem: {} (avg {}) (center {:?})\n{}", share, avg_share, self.center, geo);
+                        Some(ref mut f) => {
+                            // gather up all the info into a problem description (we only need to do this if printing is enabled)
+                            let geo = Geometry::for_printing(&*self.closed_interior.borrow(), &self.detectors);
+                            let structure = format!("{}", geo);
+                            let problem = LowerBoundProblem {
+                                center: self.center,
+                                share: share.into(),
+                                structure,
+                            };
 
-                            #[cfg(test)]
-                            println!("{}", msg);
-                            #[cfg(not(test))]
-                            writeln!(_f, "{}", msg).unwrap();
+                            // if there haven't been any problems so far print a message (early problem warnings are nice since we delay printing till end for sorted order)
+                            if self.problems.is_empty() {
+                                writeln!(f, "encountered problems...\n").unwrap();
+                            }
+
+                            // add to problems list (automatically sorted like we want)
+                            self.problems.insert(problem);
                         }
                         None => (),
                     }
@@ -807,7 +836,7 @@ where Codes: codesets::Set<(isize, isize)>
             }
         }
     }
-    fn calc<Adj>(&mut self, thresh: f64, pipe: Option<&'a mut dyn io::Write>, centers: &[(isize, isize)]) -> ((usize, usize), f64)
+    fn calc<Adj>(&mut self, strategy: TheoStrategy, thresh: f64, pipe: Option<&'a mut dyn io::Write>) -> ((usize, usize), f64)
     where Adj: AdjacentIterator
     {
         let closed_interior = self.closed_interior.clone();
@@ -819,9 +848,11 @@ where Codes: codesets::Set<(isize, isize)>
         self.highest = 0.0;
         self.thresh = thresh;
         self.pipe = pipe;
+        self.problems.clear();
+        self.strategy = strategy;
 
         // fold recursive results from all provided center values
-        for c in centers {
+        for c in Adj::CLASSES {
             // set the center
             self.center = *c;
 
@@ -832,6 +863,7 @@ where Codes: codesets::Set<(isize, isize)>
                 closed_interior.extend(Adj::Open::at(*c).flat_map(|p| Adj::Closed::at(p)));
             }
 
+            #[cfg(debug)]
             println!("closed interior:\n{}", Geometry::for_printing(&*closed_interior.borrow(), &Default::default()));
 
             // generate open interior - everything up to radius 2 except the center
@@ -841,6 +873,7 @@ where Codes: codesets::Set<(isize, isize)>
                 open_interior.remove(c);
             }
 
+            #[cfg(debug)]
             println!("open interior:\n{}", Geometry::for_printing(&*open_interior.borrow(), &Default::default()));
 
             // generate exterior - everything at exactly radius 3
@@ -849,6 +882,7 @@ where Codes: codesets::Set<(isize, isize)>
                 closed_interior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p)).collect()
             };
 
+            #[cfg(debug)]
             println!("exterior:\n{}", Geometry::for_printing(&exterior, &Default::default()));
 
             // generate boundary - everything at exactly radius 2
@@ -857,6 +891,7 @@ where Codes: codesets::Set<(isize, isize)>
                 exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| closed_interior.contains(p)).collect()
             };
 
+            #[cfg(debug)]
             println!("boundary:\n{}", Geometry::for_printing(&boundary, &Default::default()));
 
             // generate farlands - everything at exactly radius 4
@@ -865,6 +900,7 @@ where Codes: codesets::Set<(isize, isize)>
                 exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p) && !exterior.contains(p)).collect()
             };
 
+            #[cfg(debug)]
             println!("farlands:\n{}", Geometry::for_printing(&farlands, &Default::default()));
 
             // generate neighbor map - maps neighbor of center to outer points
@@ -878,9 +914,12 @@ where Codes: codesets::Set<(isize, isize)>
                         inner_close: Adj::Open::at(p).filter(|x| boundary.contains(x)).collect(),
                         far: ball2.iter().filter(|&x| exterior.contains(x)).copied().collect(),
                     };
-                    println!("neighbor {:?} inner_close: {:?}", p, lands.inner_close);
-                    println!("neighbor {:?} far:         {:?}", p, lands.far);
-                    println!();
+                    #[cfg(debug)]
+                    {
+                        println!("neighbor {:?} inner_close: {:?}", p, lands.inner_close);
+                        println!("neighbor {:?} far:         {:?}", p, lands.far);
+                        println!();
+                    }
 
                     neighbor_map.insert(p, lands);
                 }
@@ -900,11 +939,14 @@ where Codes: codesets::Set<(isize, isize)>
                         outer_close: ball3.iter().filter(|&x| exterior.contains(x)).copied().collect(),
                         far: ball2.iter().filter(|&x| farlands.contains(x)).copied().collect(),
                     };
-                    println!("boundary {:?} peers:       {:?}", p, lands.peers);
-                    println!("boundary {:?} inner_close: {:?}", p, lands.inner_close);
-                    println!("boundary {:?} outer_close: {:?}", p, lands.outer_close);
-                    println!("boundary {:?} far:         {:?}", p, lands.far);
-                    println!();
+                    #[cfg(debug)]
+                    {
+                        println!("boundary {:?} peers:       {:?}", p, lands.peers);
+                        println!("boundary {:?} inner_close: {:?}", p, lands.inner_close);
+                        println!("boundary {:?} outer_close: {:?}", p, lands.outer_close);
+                        println!("boundary {:?} far:         {:?}", p, lands.far);
+                        println!();
+                    }
                     boundary_map.insert(*p, lands);
                 }
             }
@@ -916,6 +958,19 @@ where Codes: codesets::Set<(isize, isize)>
             // perform center folding
             self.calc_recursive::<Adj, _>(open_interior.borrow().iter().copied());
         }
+
+        // if there were problems, print them if printing is enabled - already in sorted order for user convenience
+        if !self.problems.is_empty() {
+            match self.pipe {
+                Some(ref mut f) => {
+                    for p in self.problems.iter() {
+                        writeln!(f, "problem: {} (center {:?})\n{}", p.share, p.center, p.structure).unwrap();
+                    }
+                    writeln!(f, "total problems: {}", self.problems.len()).unwrap();
+                },
+                None => (),
+            }
+        };
 
         // lcm(1..=9) = 2520, so multiply and divide by 2520 to create an exact fractional representation
         let v = (self.highest * 2520.0).round() as usize;
@@ -929,14 +984,14 @@ where Codes: codesets::Set<(isize, isize)>
 
 #[test]
 fn test_lower_bound_searcher_sq_old_optimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(2.50001, None, &[(0, 0)]);
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(TheoStrategy::AverageWithNeighbors, 2.50001, None);
     assert_lt!(res.1, 0.400001);
     assert_gt!(res.1, 0.399999);
     assert_eq!(res.0, (2, 5)); // we can find exact solution
 }
 #[test]
 fn test_lower_bound_searcher_sq_old_suboptimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(2.49999, None, &[(0, 0)]);
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(TheoStrategy::AverageWithNeighbors, 2.49999, None);
     assert_lt!(res.1, 0.400001);
     assert_gt!(res.1, 0.399999);
     assert_eq!(res.0, (2, 5)); // we can find exact solution (no averaging required)
@@ -944,75 +999,51 @@ fn test_lower_bound_searcher_sq_old_suboptimal() {
 
 #[test]
 fn test_lower_bound_searcher_tri_old_optimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(3.250001, None, &[(0, 0)]);
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(TheoStrategy::AverageWithNeighbors, 3.250001, None);
     assert_lt!(res.1, 0.3076924); // we don't find exact, but must be less than proven lower bound
 }
 #[test]
 fn test_lower_bound_searcher_tri_old_suboptimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(3.249999, None, &[(0, 0)]);
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(TheoStrategy::AverageWithNeighbors, 3.249999, None);
     assert_lt!(res.1, 0.3076923);
     assert_ne!(res.0, (4, 13)); // averaging is required so this will be suboptimal
 }
 
 #[test]
 fn test_lower_bound_searcher_tri_det_optimal() {
-    let res = LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(2.000001, None, &[(0, 0)]);
+    let res = LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(TheoStrategy::AverageWithNeighbors, 2.000001, None);
     assert_lt!(res.1, 0.50001);
     assert_gt!(res.1, 0.49999);
     assert_eq!(res.0, (1, 2)); // we can find exact solution
 }
 #[test]
 fn test_lower_bound_searcher_tri_det_suboptimal() {
-    let res = LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(1.999999, None, &[(0, 0)]);
+    let res = LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(TheoStrategy::AverageWithNeighbors, 1.999999, None);
     assert_lt!(res.1, 0.49999);
     assert_ne!(res.0, (1, 2)); // averaging is required so this will be suboptimal
 }
 
 #[test]
 fn test_lower_bound_searcher_hex_old_high_share() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(1000.0, None, &[(0, 0)]);
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(TheoStrategy::AverageWithNeighbors, 1000.0, None);
     assert_lt!(res.1, 0.50001);
     assert_gt!(res.1, 0.49999);
     assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
 }
 #[test]
 fn test_lower_bound_searcher_hex_old_optimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(2.000001, None, &[(0, 0)]);
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(TheoStrategy::AverageWithNeighbors, 2.000001, None);
     assert_lt!(res.1, 0.50001);
     assert_gt!(res.1, 0.39999);
     assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
 }
 #[test]
 fn test_lower_bound_searcher_hex_old_suboptimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(1.999999, None, &[(0, 0)]);
+    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(TheoStrategy::AverageWithNeighbors, 1.999999, None);
     assert_lt!(res.1, 0.50001);
     assert_gt!(res.1, 0.49999);
     assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
 }
-
-
-
-
-
-
-// these suboptimal test case has problems (might be due to LD set constraints being incorrect)
-#[test]
-fn test_lower_bound_searcher_king_ld_optimal() {
-    let res = LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenKing>(5.000001, None, &[(0, 0)]);
-    assert_lt!(res.1, 0.20001);
-    assert_gt!(res.1, 0.19999);
-    assert_eq!(res.0, (1, 5)); // we can find exact solution
-}
-// #[test]
-// fn test_lower_bound_searcher_king_ld_suboptimal() {
-//     let res = LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenKing>(4.99999, None, &[(0, 0)]);
-//     assert_lt!(res.1, 0.19999);
-// }
-
-
-
-
-
 
 struct FiniteGraphSolver<'a, Codes> {
     verts: &'a [Vertex],
@@ -1264,9 +1295,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, goal: &str) {
         "detic:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedKing>(Goal::MeetOrBeat(parse_thresh(goal))),
         "erric:king" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedKing>(Goal::MeetOrBeat(parse_thresh(goal))),
         "old:king" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "red:king" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "det:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "err:king" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "redold:king" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "detold:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "errold:king" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
 
         "dom:tri" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedTri>(Goal::MeetOrBeat(parse_thresh(goal))),
         "odom:tri" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
@@ -1278,9 +1309,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, goal: &str) {
         "detic:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedTri>(Goal::MeetOrBeat(parse_thresh(goal))),
         "erric:tri" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedTri>(Goal::MeetOrBeat(parse_thresh(goal))),
         "old:tri" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "red:tri" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "det:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "err:tri" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "redold:tri" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "detold:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "errold:tri" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
 
         "dom:grid" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
         "odom:grid" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
@@ -1292,9 +1323,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, goal: &str) {
         "detic:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
         "erric:grid" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
         "old:grid" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "red:grid" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "det:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "err:grid" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "redold:grid" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "detold:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "errold:grid" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
 
         "dom:hex" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedHex>(Goal::MeetOrBeat(parse_thresh(goal))),
         "odom:hex" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
@@ -1306,9 +1337,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, goal: &str) {
         "detic:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedHex>(Goal::MeetOrBeat(parse_thresh(goal))),
         "erric:hex" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedHex>(Goal::MeetOrBeat(parse_thresh(goal))),
         "old:hex" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "red:hex" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "det:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "err:hex" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "redold:hex" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "detold:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "errold:hex" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
 
         "dom:tmb" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
         "odom:tmb" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
@@ -1320,9 +1351,9 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, goal: &str) {
         "detic:tmb" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
         "erric:tmb" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
         "old:tmb" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "red:tmb" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "det:tmb" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "err:tmb" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "redold:tmb" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "detold:tmb" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
+        "errold:tmb" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
 
         _ => {
             eprintln!("unknown type: {}", mode);
@@ -1338,67 +1369,52 @@ fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, goal: &str) {
         None => println!("no solution found"),
     }
 }
-fn theo_helper(mode: &str, thresh: &str) {
+fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy) {
     let thresh = parse_share(thresh);
-    let ((n, k), f) = match mode {
-        "dom:king" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "odom:king" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "ld:king" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "ic:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "redic:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "detic:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "erric:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "old:king" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "red:king" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "det:king" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "err:king" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenKing>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+    println!("lower bound for {} set on {} graph - {:?} thresh {}", set, graph, strategy, thresh);
 
-        "dom:tri" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "odom:tri" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "ld:tri" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "ic:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "redic:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "detic:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "erric:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "old:tri" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "red:tri" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "det:tri" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "err:tri" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenTri>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
+    macro_rules! calc {
+        ($set:ident, $adj:ident) => {
+            LowerBoundSearcher::<codesets::$set<(isize, isize)>>::new().calc::<adj::$adj>(strategy, thresh, Some(&mut io::stdout()))
+        }
+    }
+    macro_rules! family {
+        ($open:ident, $closed:ident) => {
+            match set {
+                "dom" => calc!(DOM, $closed),
+                "odom" => calc!(DOM, $open),
+                "ic" => calc!(OLD, $closed),
+                "red:ic" => calc!(RED, $closed),
+                "det:ic" => calc!(DET, $closed),
+                "err:ic" => calc!(ERR, $closed),
+                "old" => calc!(OLD, $open),
+                "red:old" => calc!(RED, $open),
+                "det:old" => calc!(DET, $open),
+                "err:old" => calc!(ERR, $open),
+                _ => {
+                    eprintln!("unknown set: {}", set);
+                    std::process::exit(4);
+                }
+            }
+        }
+    }
 
-        "dom:grid" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "odom:grid" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "ld:grid" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "ic:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "redic:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "detic:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "erric:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "old:grid" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "red:grid" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "det:grid" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "err:grid" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenGrid>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-
-        "dom:hex" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "odom:hex" => LowerBoundSearcher::<codesets::DOM<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "ld:hex" => LowerBoundSearcher::<codesets::LD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "ic:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "redic:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "detic:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "erric:hex" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::ClosedHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "old:hex" => LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "red:hex" => LowerBoundSearcher::<codesets::RED<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "det:hex" => LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-        "err:hex" => LowerBoundSearcher::<codesets::ERR<(isize, isize)>>::new().calc::<adj::OpenHex>(thresh, Some(&mut io::stdout()), &[(0, 0)]),
-
+    let ((n, k), f) = match graph {
+        "king" => family!(OpenKing, ClosedKing),
+        "tri" => family!(OpenTri, ClosedTri),
+        "grid" => family!(OpenGrid, ClosedGrid),
+        "hex" => family!(OpenHex, ClosedHex),
+        "tmb" => family!(OpenTMB, ClosedTMB),
         _ => {
-            eprintln!("unknown type: {}", mode);
+            eprintln!("unknown graph: {}", graph);
             std::process::exit(4);
         }
     };
-
     println!("found theo lower bound {}/{} ({})", n, k, f);
 }
 fn finite_helper(mut g: FiniteGraph, mode: &str, count: usize) {
     let success = match mode {
+        "odom" => g.solver::<codesets::DOM<usize>>().find_solution(count),
         "old" => g.solver::<codesets::OLD<usize>>().find_solution(count),
         "red" => g.solver::<codesets::RED<usize>>().find_solution(count),
         "det" => g.solver::<codesets::DET<usize>>().find_solution(count),
@@ -1458,8 +1474,12 @@ fn main() {
             finite_helper(g, &args[3], count);
         }
         "theo" => {
-            if args.len() < 4 { show_usage(1); }
-            theo_helper(&args[2], &args[3]);
+            if args.len() < 5 { show_usage(1); }
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::NoAveraging);
+        }
+        "theo-avg" => {
+            if args.len() < 5 { show_usage(1); }
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::AverageWithNeighbors);
         }
         "rect" => {
             if args.len() < 6 { show_usage(1); }
@@ -1470,7 +1490,7 @@ fn main() {
                 std::process::exit(3);
             }
             let tess = RectTessellation::new(rows, cols);
-            tess_helper(tess, &args[4], &args[5])
+            tess_helper(tess, &args[4], &args[5]);
         }
         "geo" => {
             let tess = match GeometryTessellation::with_shape(&args[2]) {
