@@ -10,6 +10,16 @@ use std::cmp;
 #[macro_use]
 extern crate more_asserts;
 
+macro_rules! crash {
+    ($val:expr) => {
+        std::process::exit($val)
+    };
+    ($val:expr, $($msg:expr),+) => {{
+        eprintln!($($msg),+);
+        std::process::exit($val);
+    }};
+}
+
 mod util;
 mod adj;
 mod codesets;
@@ -1263,119 +1273,66 @@ fn test_rect_pos() {
 fn parse_thresh(v: &str) -> f64 {
     match v.parse::<f64>() {
         Ok(v) if v > 0.0 && v <= 1.0 => v,
-        Ok(v) => {
-            eprintln!("thresh {} was outside valid range (0, 1]", v);
-            std::process::exit(7);
-        }
-        Err(_) => {
-            eprintln!("failed to parse '{}' as float", v);
-            std::process::exit(7);
-        }
+        Ok(v) => crash!(2, "thresh {} was outside valid range (0, 1]", v),
+        Err(_) => crash!(2, "failed to parse '{}' as float", v),
     }
 }
 fn parse_exact(v: &str, max: usize) -> usize {
     match v.parse::<usize>() {
         Ok(v) if v <= max => v,
-        Ok(v) => {
-            eprintln!("count {} exceeded max {}", v, max);
-            std::process::exit(7);
-        }
-        Err(_) => {
-            eprintln!("failed to parse '{}' as uint", v);
-            std::process::exit(7);
-        }
+        Ok(v) => crash!(2, "count {} exceeded max {}", v, max),
+        Err(_) => crash!(2, "failed to parse '{}' as uint", v),
     }
 }
 fn parse_share(v: &str) -> f64 {
     match v.parse::<f64>() {
         Ok(v) if v > 0.0 => v,
-        Ok(v) => {
-            eprintln!("share {} was outside valid range (0, inf)", v);
-            std::process::exit(7);
-        }
-        Err(_) => {
-            eprintln!("failed to parse '{}' as float", v);
-            std::process::exit(7);
-        }
+        Ok(v) => crash!(2, "share {} was outside valid range (0, inf)", v),
+        Err(_) => crash!(2, "failed to parse '{}' as float", v),
     }
 }
 
-fn tess_helper<T: Tessellation>(mut tess: T, mode: &str, goal: &str) {
-    let res = match mode {
-        "dom:king" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "odom:king" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "edom:king" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::ClosedKing>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "eodom:king" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::OpenKing>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "ld:king" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "ic:king" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redic:king" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detic:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "erric:king" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "old:king" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redold:king" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detold:king" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "errold:king" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenKing>(Goal::MeetOrBeat(parse_thresh(goal))),
-
-        "dom:tri" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "odom:tri" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "edom:tri" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::ClosedTri>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "eodom:tri" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::OpenTri>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "ld:tri" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "ic:tri" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redic:tri" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detic:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "erric:tri" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "old:tri" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redold:tri" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detold:tri" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "errold:tri" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTri>(Goal::MeetOrBeat(parse_thresh(goal))),
-
-        "dom:grid" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "odom:grid" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "edom:grid" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::ClosedGrid>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "eodom:grid" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::OpenGrid>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "ld:grid" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "ic:grid" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redic:grid" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detic:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "erric:grid" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "old:grid" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redold:grid" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detold:grid" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "errold:grid" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenGrid>(Goal::MeetOrBeat(parse_thresh(goal))),
-
-        "dom:hex" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "odom:hex" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "edom:hex" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::ClosedHex>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "eodom:hex" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::OpenHex>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "ld:hex" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "ic:hex" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redic:hex" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detic:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "erric:hex" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "old:hex" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redold:hex" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detold:hex" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "errold:hex" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenHex>(Goal::MeetOrBeat(parse_thresh(goal))),
-
-        "dom:tmb" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::ClosedTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "odom:tmb" => tess.try_satisfy::<codesets::DOM<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "edom:tmb" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::ClosedTMB>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "eodom:tmb" => tess.try_satisfy::<codesets::EDOM<(isize, isize)>, adj::OpenTMB>(Goal::Exactly(parse_exact(goal, tess.size()))),
-        "ld:tmb" => tess.try_satisfy::<codesets::LD<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "ic:tmb" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::ClosedTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redic:tmb" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::ClosedTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detic:tmb" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::ClosedTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "erric:tmb" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::ClosedTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "old:tmb" => tess.try_satisfy::<codesets::OLD<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "redold:tmb" => tess.try_satisfy::<codesets::RED<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "detold:tmb" => tess.try_satisfy::<codesets::DET<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-        "errold:tmb" => tess.try_satisfy::<codesets::ERR<(isize, isize)>, adj::OpenTMB>(Goal::MeetOrBeat(parse_thresh(goal))),
-
-        _ => {
-            eprintln!("unknown type: {}", mode);
-            std::process::exit(4);
+fn tess_helper<T: Tessellation>(mut tess: T, set: &str, graph: &str, goal: &str) {
+    macro_rules! calc_thresh {
+        ($set:ident, $adj:ident) => {
+            tess.try_satisfy::<codesets::$set<(isize, isize)>, adj::$adj>(Goal::MeetOrBeat(parse_thresh(goal)))
         }
+    }
+    macro_rules! calc_exactly {
+        ($set:ident, $adj:ident) => {
+            tess.try_satisfy::<codesets::$set<(isize, isize)>, adj::$adj>(Goal::Exactly(parse_exact(goal, tess.size())))
+        }
+    }
+    macro_rules! family {
+        ($open:ident, $closed:ident) => {
+            match set {
+                "dom" => calc_thresh!(DOM, $closed),
+                "odom" => calc_thresh!(DOM, $open),
+                "edom" => calc_exactly!(EDOM, $closed),
+                "eodom" => calc_exactly!(EDOM, $open),
+                "ld" => calc_thresh!(LD, $open),
+                "ic" => calc_thresh!(OLD, $closed),
+                "red:ic" => calc_thresh!(RED, $closed),
+                "det:ic" => calc_thresh!(DET, $closed),
+                "err:ic" => calc_thresh!(ERR, $closed),
+                "old" => calc_thresh!(OLD, $open),
+                "red:old" => calc_thresh!(RED, $open),
+                "det:old" => calc_thresh!(DET, $open),
+                "err:old" => calc_thresh!(ERR, $open),
+
+                _ => crash!(2, "unknown set: {}", set),
+            }
+        }
+    }
+
+    let res = match graph {
+        "king" => family!(OpenKing, ClosedKing),
+        "tri" => family!(OpenTri, ClosedTri),
+        "grid" => family!(OpenGrid, ClosedGrid),
+        "hex" => family!(OpenHex, ClosedHex),
+        "tmb" => family!(OpenTMB, ClosedTMB),
+
+        _ => crash!(2, "unknown graph: {}", graph),
     };
     match res {
         Some(min) => {
@@ -1408,10 +1365,8 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy) {
                 "red:old" => calc!(RED, $open),
                 "det:old" => calc!(DET, $open),
                 "err:old" => calc!(ERR, $open),
-                _ => {
-                    eprintln!("unknown set: {}", set);
-                    std::process::exit(4);
-                }
+                
+                _ => crash!(2, "unknown set: {}", set),
             }
         }
     }
@@ -1422,14 +1377,35 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy) {
         "grid" => family!(OpenGrid, ClosedGrid),
         "hex" => family!(OpenHex, ClosedHex),
         "tmb" => family!(OpenTMB, ClosedTMB),
-        _ => {
-            eprintln!("unknown graph: {}", graph);
-            std::process::exit(4);
-        }
+
+        _ => crash!(2, "unknown graph: {}", graph),
     };
     println!("found theo lower bound {}/{} ({})", n, k, f);
 }
-fn finite_helper(mut g: FiniteGraph, set: &str, count: usize) {
+fn finite_helper(graph_path: &str, set: &str, count: &str) {
+    let mut g = match FiniteGraph::with_shape(graph_path) {
+        Ok(g) => g,
+        Err(e) => {
+            match e {
+                GraphLoadError::FileOpenFailure => eprintln!("failed to open graph file {}", graph_path),
+                GraphLoadError::InvalidFormat(msg) => eprintln!("file {} was invalid format: {}", graph_path, msg),
+            }
+            crash!(2);
+        }
+    };
+    let count = match count.parse::<usize>() {
+        Ok(n) => {
+            if n == 0 {
+                crash!(2, "count cannot be zero");
+            }
+            if n > g.verts.len() {
+                crash!(2, "count cannot be larger than graph size");
+            }
+            n
+        }
+        Err(_) => crash!(2, "failed to parse '{}' as positive integer", count),
+    };
+
     macro_rules! calc {
         ($t:ident, $m:ident) => {
             g.solver::<codesets::$t<usize>>().find_solution(count, AdjType::$m)
@@ -1450,10 +1426,8 @@ fn finite_helper(mut g: FiniteGraph, set: &str, count: usize) {
         "red:old" => calc!(RED, Open),
         "det:old" => calc!(DET, Open),
         "err:old" => calc!(ERR, Open),
-        _ => {
-            eprintln!("unknown set: {}", set);
-            std::process::exit(4);
-        }
+
+        _ => crash!(2, "unknown set: {}", set),
     };
     if success {
         println!("found solution:\n{:?}", g.get_solution());
@@ -1464,65 +1438,41 @@ fn finite_helper(mut g: FiniteGraph, set: &str, count: usize) {
 }
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-
-    let show_usage = |ret| -> ! {
-        eprintln!("usage: {} (rect w h|geo shape) (old|det):(king|tri) [thresh]", args[0]);
-        std::process::exit(ret);
-    };
-
-    if args.len() < 2 { show_usage(1); }
-    match args[1].as_str() {
-        "finite" => {
-            if args.len() < 5 { show_usage(1); }
-            let g = match FiniteGraph::with_shape(&args[2]) {
-                Ok(g) => g,
-                Err(e) => {
-                    match e {
-                        GraphLoadError::FileOpenFailure => eprintln!("failed to open graph file {}", args[2]),
-                        GraphLoadError::InvalidFormat(msg) => eprintln!("file {} was invalid format: {}", args[2], msg),
-                    }
-                    std::process::exit(5);
-                }
-            };
-            let count = match args[4].parse::<usize>() {
-                Ok(n) => {
-                    if n == 0 {
-                        eprintln!("count cannot be zero");
-                        std::process::exit(6);
-                    }
-                    if n > g.verts.len() {
-                        eprintln!("count cannot be larger than graph size");
-                        std::process::exit(6);
-                    }
-                    n
-                }
-                Err(_) => {
-                    eprintln!("failed to parse '{}' as positive integer", args[4]);
-                    std::process::exit(7);
-                }
-            };
-            finite_helper(g, &args[3], count);
+    match args.get(1).map(String::as_str) {
+        Some("finite") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} finite [graph-file] [set-type] [set-size]", args[0]);
+            }
+            finite_helper(&args[2], &args[3], &args[4]);
         }
-        "theo" => {
-            if args.len() < 5 { show_usage(1); }
+        Some("theo") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} theo [set-type] [graph] [thresh]", args[0]);
+            }
             theo_helper(&args[2], &args[3], &args[4], TheoStrategy::NoAveraging);
         }
-        "theo-avg" => {
-            if args.len() < 5 { show_usage(1); }
+        Some("theo-avg") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} theo-avg [set-type] [graph] [thresh]", args[0]);
+            }
             theo_helper(&args[2], &args[3], &args[4], TheoStrategy::AverageWithNeighbors);
         }
-        "rect" => {
-            if args.len() < 6 { show_usage(1); }
+        Some("rect") => {
+            if args.len() != 7 {
+                crash!(1, "usage: {} rect [rows] [cols] [set-type] [graph] [thresh]", args[0]);
+            }
             let rows: usize = args[2].parse().unwrap();
             let cols: usize = args[3].parse().unwrap();
             if rows < 2 || cols < 2 {
-                eprintln!("1x1, 1xn, nx1 are not supported to avoid branch conditions\nthey also cannot result in lower than 2/3");
-                std::process::exit(3);
+                crash!(2, "1xn and nx1 are not supported to avoid branch conditions");
             }
             let tess = RectTessellation::new(rows, cols);
-            tess_helper(tess, &args[4], &args[5]);
+            tess_helper(tess, &args[4], &args[5], &args[6]);
         }
-        "geo" => {
+        Some("geo") => {
+            if args.len() != 6 {
+                crash!(1, "usage: {} geo [geometry-file] [set-type] [graph] [thresh]", args[0]);
+            }
             let tess = match GeometryTessellation::with_shape(&args[2]) {
                 Ok(x) => x,
                 Err(e) => {
@@ -1531,12 +1481,12 @@ fn main() {
                         GeometryLoadResult::InvalidFormat(msg) => eprintln!("file {} was invalid format: {}", args[2], msg),
                         GeometryLoadResult::TessellationFailure(msg) => eprintln!("file {} had a tessellation failure: {}", args[2], msg),
                     };
-                    std::process::exit(5);
+                    crash!(2);
                 },
             };
             println!("loaded geometry:\n{}", tess);
-            tess_helper(tess, &args[3], &args[4])
+            tess_helper(tess, &args[3], &args[4], &args[5])
         }
-        _ => show_usage(1),
+        _ => crash!(1, "usage: {} [finite|rect|geo|theo|theo-avg]", args[0]),
     };
 }
