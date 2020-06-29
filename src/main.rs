@@ -6,6 +6,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::cmp;
+use std::mem;
 
 #[macro_use]
 extern crate more_asserts;
@@ -234,22 +235,34 @@ impl Tessellation for RectTessellation {
 struct Geometry {
     shape: BTreeSet<(isize, isize)>,
     detectors: BTreeSet<(isize, isize)>,
+    w: isize,
+    h: isize,
 }
 impl Geometry {
     fn for_printing(shape: &BTreeSet<(isize, isize)>, detectors: &BTreeSet<(isize, isize)>) -> Self {
-        let mut min = (isize::MAX, isize::MAX);
-        for p in shape {
-            if p.0 < min.0 {
-                min.0 = p.0;
-            }
-            if p.1 < min.1 {
-                min.1 = p.1;
-            }
-        }
+        assert!(!shape.is_empty());
+
+        let min = (
+            shape.iter().map(|(a, _)| *a).min().unwrap(),
+            shape.iter().map(|(_, b)| *b).min().unwrap(),
+        );
+        let max = (
+            shape.iter().map(|(a, _)| *a).max().unwrap(),
+            shape.iter().map(|(_, b)| *b).max().unwrap(),
+        );
+
         Self {
             shape: shape.iter().map(|p| (p.0 - min.0, p.1 - min.1)).collect(),
             detectors: detectors.iter().map(|p| (p.0 - min.0, p.1 - min.1)).collect(),
+            h: max.0 - min.0 + 1,
+            w: max.1 - min.1 + 1,
         }
+    }
+    fn width(&self) -> isize {
+        self.w
+    }
+    fn height(&self) -> isize {
+        self.h
     }
 }
 impl fmt::Display for Geometry {
@@ -282,9 +295,13 @@ struct GeometrySolver<'a, Codes> {
     shape: &'a BTreeSet<(isize, isize)>,
     interior: &'a BTreeSet<(isize, isize)>,
     shape_with_padding: &'a BTreeSet<(isize, isize)>,
-    tessellation_map: &'a HashMap<(isize, isize), (isize, isize)>,
     first_per_row: &'a HashSet<(isize, isize)>,
     old_set: &'a mut BTreeSet<(isize, isize)>,
+    
+    tessellation_maps: &'a [(HashMap<(isize, isize), (isize, isize)>, (isize, isize), (isize, isize))],
+    current_tessellation_map: &'a (HashMap<(isize, isize), (isize, isize)>, (isize, isize), (isize, isize)),
+    src_basis_a: &'a mut (isize, isize),
+    src_basis_b: &'a mut (isize, isize),
 
     codes: Codes,
     needed: usize,
@@ -296,7 +313,7 @@ where Codes: codesets::Set<(isize, isize)>
         self.codes.clear();
         for p in self.interior {
             if p.0 >= row - 1 { break; }
-            let is_detector = self.old_set.contains(self.tessellation_map.get(p).unwrap());
+            let is_detector = self.old_set.contains(p);
             let code = self.get_locating_code::<Adj>(*p);
             if !self.codes.add(is_detector, code) {
                 return false;
@@ -338,22 +355,32 @@ where Codes: codesets::Set<(isize, isize)>
     fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
         let mut v = Vec::with_capacity(9);
         for x in Adj::new(pos.0, pos.1) {
-            if self.old_set.contains(self.tessellation_map.get(&x).unwrap()) {
+            if self.old_set.contains(self.current_tessellation_map.0.get(&x).unwrap()) {
                 v.push(x);
             }
         }
         v
     }
     fn is_old<Adj: adj::AdjacentIterator>(&mut self) -> bool {
-        self.codes.clear();
-        for pos in self.shape_with_padding {
-            let is_detector = self.old_set.contains(self.tessellation_map.get(pos).unwrap());
-            let code = self.get_locating_code::<Adj>(*pos);
-            if !self.codes.add(is_detector, code) {
-                return false;
+        'next_tess: for tess in self.tessellation_maps {
+            self.current_tessellation_map = tess;
+
+            // check for validity
+            self.codes.clear();
+            for pos in self.shape_with_padding {
+                let is_detector = self.old_set.contains(self.current_tessellation_map.0.get(pos).unwrap());
+                let code = self.get_locating_code::<Adj>(*pos);
+                if !self.codes.add(is_detector, code) {
+                    continue 'next_tess; // if this tess had a failure, on to next tess
+                }
             }
+
+            // merciful domi, we've done it! update the source basis vecs before returning the good news
+            *self.src_basis_a = tess.1;
+            *self.src_basis_b = tess.2;
+            return true;
         }
-        true
+        false // otherwise no tessellation worked - failure
     }
     fn try_satisfy<Adj: adj::AdjacentIterator>(&mut self, goal: Goal) -> Option<usize> {
         self.old_set.clear();
@@ -367,8 +394,8 @@ struct GeometryTessellation {
     geo: Geometry,
     interior: BTreeSet<(isize, isize)>,
     shape_with_padding: BTreeSet<(isize, isize)>,
-    tessellation_map: HashMap<(isize, isize), (isize, isize)>,
     first_per_row: HashSet<(isize, isize)>,
+    tessellation_maps: Vec<(HashMap<(isize, isize), (isize, isize)>, (isize, isize), (isize, isize))>,
     basis_a: (isize, isize),
     basis_b: (isize, isize),
 }
@@ -381,38 +408,20 @@ impl fmt::Display for GeometryTessellation {
     }
 }
 impl GeometryTessellation {
-    fn with_shape<P: AsRef<Path>>(path: P) -> Result<Self, GeometryLoadResult> {
-        let mut f = BufReader::new(match File::open(path) {
+    fn with_shape(path: &str) -> Result<Self, GeometryLoadResult> {
+        let f = BufReader::new(match File::open(path) {
             Ok(x) => x,
             Err(_) => return Err(GeometryLoadResult::FileOpenFailure),
         });
-
-        let (basis_a, basis_b) = {
-            let mut line = String::new();
-            f.read_line(&mut line).unwrap();
-
-            let args: Vec<&str> = line.split_whitespace().collect();
-            if args.len() != 4 {
-                return Err(GeometryLoadResult::InvalidFormat("expected 4 tessellation arguments as top line of file"));
-            }
-            let mut parsed: Vec<isize> = vec![];
-            for arg in args {
-                parsed.push(match arg.parse::<isize>() {
-                    Ok(x) => x,
-                    Err(_) => return Err(GeometryLoadResult::InvalidFormat("failed to parse a tessellation arg as integer")),
-                });
-            }
-            ((parsed[0], parsed[1]), (parsed[2], parsed[3]))
-        };
-
         let geo = {
             let mut shape: BTreeSet<(isize, isize)> = Default::default();
-            for (row, line) in f.lines().map(|x| x.unwrap()).enumerate() {
+            for (row, line) in f.lines().map(Result::unwrap).enumerate() {
                 for (col, item) in line.split_whitespace().enumerate() {
                     match item {
                         x if x.len() != 1 => return Err(GeometryLoadResult::InvalidFormat("expected geometry element to be length 1")),
                         "." => (),
-                        _ => { shape.insert((row as isize, col as isize)); },
+                        "@" => { shape.insert((row as isize, col as isize)); },
+                        _ => return Err(GeometryLoadResult::InvalidFormat("encountered unexpected character")),
                     };
                 }
             }
@@ -421,14 +430,11 @@ impl GeometryTessellation {
             }
             Geometry::for_printing(&shape, &Default::default())
         };
-        let interior = {
-            let boundary: BTreeSet<_> = geo.shape.iter().filter(|x| adj::OpenKing::new(x.0, x.1).any(|y| !geo.shape.contains(&y))).cloned().collect();
-            &geo.shape - &boundary
-        };
+        let interior: BTreeSet<_> = geo.shape.iter().filter(|&x| adj::OpenKing::at(*x).all(|p| geo.shape.contains(&p))).copied().collect();
         let first_per_row = {
             let mut s: HashSet<(isize, isize)> = Default::default();
             let mut r = !0;
-            for p in &geo.shape {
+            for p in geo.shape.iter() {
                 if p.0 != r {
                     r = p.0;
                     s.insert(*p);
@@ -439,44 +445,62 @@ impl GeometryTessellation {
 
         let shape_with_padding: BTreeSet<_> = {
             let mut t = geo.shape.clone();
-            t.extend(geo.shape.iter().flat_map(|x| adj::OpenKing::new(x.0, x.1)));
+            t.extend(geo.shape.iter().flat_map(|x| adj::OpenKing::at(*x)));
             t
         };
         let shape_with_extra_padding: BTreeSet<_> = {
             let mut t = shape_with_padding.clone();
-            t.extend(shape_with_padding.iter().flat_map(|x| adj::OpenKing::new(x.0, x.1)));
+            t.extend(shape_with_padding.iter().flat_map(|x| adj::OpenKing::at(*x)));
             t
         };
 
-        let tessellation_map = {
+        let tessellation_maps: Vec<_> = {
+            let mut valid_tessellations: BTreeMap<BTreeMap<(isize, isize), (isize, isize)>, ((isize, isize), (isize, isize))> = Default::default();
             let mut p: HashSet<(isize, isize)> = HashSet::with_capacity(geo.shape.len() * 25);
-            let mut m: HashMap<(isize, isize), (isize, isize)> = HashMap::with_capacity(geo.shape.len() * 9);
+            let mut m: BTreeMap<(isize, isize), (isize, isize)> = Default::default();
+            
+            // needs to be 2w and 2h so that we allow them to slip between one another
+            let basis_vecs: Vec<_> = (0..=2*geo.height()).flat_map(|r| (0..=2*geo.width()).map(move |c| (r, c))).collect();
+            for basis_a in basis_vecs.iter() {
+                'next_basis: for basis_b in basis_vecs.iter() {
+                    // clear the caches
+                    p.clear();
+                    m.clear();
 
-            for &to in &geo.shape {
-                for i in -2..=2 {
-                    for j in -2..=2 {
-                        let from = (to.0 + basis_a.0 * i + basis_b.0 * j, to.1 + basis_a.1 * i + basis_b.1 * j);
-                        if !p.insert(from) {
-                            return Err(GeometryLoadResult::TessellationFailure("tessellation resulted in overlap"));
-                        }
-                        if shape_with_extra_padding.contains(&from) {
-                            m.insert(from, to);
+                    // attempt the tessellation
+                    for &to in geo.shape.iter() {
+                        for i in -3..=3 {
+                            for j in -3..=3 {
+                                let from = (to.0 + basis_a.0 * i + basis_b.0 * j, to.1 + basis_a.1 * i + basis_b.1 * j);
+                                if !p.insert(from) {
+                                    continue 'next_basis; // on overlap, this is no good - on to the next
+                                }
+                                if shape_with_extra_padding.contains(&from) {
+                                    m.insert(from, to);
+                                }
+                            }
                         }
                     }
-                }
-            }
-            for pos in &shape_with_extra_padding {
-                if !m.contains_key(pos) {
-                    return Err(GeometryLoadResult::TessellationFailure("tessellation is not dense"));
-                }
-            }
+                    if m.len() != shape_with_extra_padding.len() {
+                        continue 'next_basis; // if tessellation is not dense, this is no good - on to the next
+                    }
 
-            m
+                    // we get to this point then tessellation is ok - add it - if we already had it, keep the old one
+                    valid_tessellations.entry(mem::take(&mut m)).or_insert((*basis_a, *basis_b));
+                }
+            }
+            if valid_tessellations.is_empty() {
+                return Err(GeometryLoadResult::TessellationFailure("no valid tessellations found"));
+            }
+            valid_tessellations.into_iter().map(|(a, (b, c))| (a.into_iter().collect(), b, c)).collect()
         };
+        let first_basis_a = tessellation_maps[0].1; // the specific values don't really matter, but better to at least use real values
+        let first_basis_b = tessellation_maps[0].2;
 
         Ok(Self {
-            geo, interior, shape_with_padding, tessellation_map, first_per_row,
-            basis_a, basis_b,
+            geo, interior, shape_with_padding, tessellation_maps, first_per_row,
+            basis_a: first_basis_a,
+            basis_b: first_basis_b,
         })
     }
     fn solver<Codes>(&mut self) -> GeometrySolver<'_, Codes>
@@ -486,9 +510,13 @@ impl GeometryTessellation {
             shape: &self.geo.shape,
             interior: &self.interior,
             shape_with_padding: &self.shape_with_padding,
-            tessellation_map: &self.tessellation_map,
             first_per_row: &self.first_per_row,
             old_set: &mut self.geo.detectors,
+            
+            tessellation_maps: &self.tessellation_maps,
+            current_tessellation_map: &self.tessellation_maps[0],
+            src_basis_a: &mut self.basis_a,
+            src_basis_b: &mut self.basis_b,
 
             codes: Default::default(),
             needed: 0,
@@ -1484,7 +1512,11 @@ fn main() {
                     crash!(2);
                 },
             };
-            println!("loaded geometry:\n{}", tess);
+            println!("loaded geometry: (size {})\n{}\nunique tilings: {}", tess.size(), tess.geo, tess.tessellation_maps.len());
+            for (i, (_, a, b)) in tess.tessellation_maps.iter().enumerate() {
+                println!("tiling {}: {:?} {:?}", i + 1, a, b);
+            }
+            println!();
             tess_helper(tess, &args[3], &args[4], &args[5])
         }
         _ => crash!(1, "usage: {} [finite|rect|geo|theo|theo-avg]", args[0]),
