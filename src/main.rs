@@ -7,6 +7,8 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::cmp;
 use std::mem;
+use std::convert::TryFrom;
+use itertools::Itertools;
 
 #[macro_use]
 extern crate more_asserts;
@@ -232,6 +234,10 @@ impl Tessellation for RectTessellation {
     }
 }
 
+enum GeometryWithShapeError {
+    FileOpenFailure,
+    InvalidFormat(&'static str),
+}
 struct Geometry {
     shape: BTreeSet<(isize, isize)>,
     detectors: BTreeSet<(isize, isize)>,
@@ -239,6 +245,27 @@ struct Geometry {
     h: isize,
 }
 impl Geometry {
+    fn with_shape(path: &str) -> Result<Self, GeometryWithShapeError> {
+        let f = BufReader::new(match File::open(path) {
+            Ok(x) => x,
+            Err(_) => return Err(GeometryWithShapeError::FileOpenFailure),
+        });
+        let mut shape: BTreeSet<(isize, isize)> = Default::default();
+        for (row, line) in f.lines().map(Result::unwrap).enumerate() {
+            for (col, item) in line.split_whitespace().enumerate() {
+                match item {
+                    x if x.len() != 1 => return Err(GeometryWithShapeError::InvalidFormat("expected geometry element to be length 1")),
+                    "." => (),
+                    "@" => { shape.insert((row as isize, col as isize)); },
+                    _ => return Err(GeometryWithShapeError::InvalidFormat("encountered unexpected character")),
+                };
+            }
+        }
+        if shape.is_empty() {
+            return Err(GeometryWithShapeError::InvalidFormat("shape is empty"));
+        }
+        Ok(Geometry::for_printing(&shape, &Default::default()))
+    }
     fn for_printing(shape: &BTreeSet<(isize, isize)>, detectors: &BTreeSet<(isize, isize)>) -> Self {
         assert!(!shape.is_empty());
 
@@ -258,11 +285,27 @@ impl Geometry {
             w: max.1 - min.1 + 1,
         }
     }
+    fn rectangle(rows: usize, cols: usize) -> Self {
+        assert!(rows > 0 && cols > 0);
+        let shape = (0..rows as isize).flat_map(|r| (0..cols as isize).map(move |c| (r, c))).collect();
+        Self {
+            shape,
+            detectors: Default::default(),
+            h: rows as isize,
+            w: cols as isize,
+        }
+    }
     fn width(&self) -> isize {
         self.w
     }
     fn height(&self) -> isize {
         self.h
+    }
+    fn size(&self) -> usize {
+        self.shape.len()
+    }
+    fn sub_geometries(self, size: usize) -> impl Iterator<Item=Geometry> {
+        self.shape.into_iter().combinations(size).map(|set| Geometry::for_printing(&set.into_iter().collect(), &Default::default()))
     }
 }
 impl fmt::Display for Geometry {
@@ -286,11 +329,6 @@ impl fmt::Display for Geometry {
     }
 }
 
-enum GeometryLoadResult {
-    FileOpenFailure,
-    InvalidFormat(&'static str),
-    TessellationFailure(&'static str),
-}
 struct GeometrySolver<'a, Codes> {
     shape: &'a BTreeSet<(isize, isize)>,
     interior: &'a BTreeSet<(isize, isize)>,
@@ -390,6 +428,9 @@ where Codes: codesets::Set<(isize, isize)>
     }
 }
 
+enum TessellationFailure {
+    NoValidTessellations,
+}
 struct GeometryTessellation {
     geo: Geometry,
     interior: BTreeSet<(isize, isize)>,
@@ -408,28 +449,29 @@ impl fmt::Display for GeometryTessellation {
     }
 }
 impl GeometryTessellation {
-    fn with_shape(path: &str) -> Result<Self, GeometryLoadResult> {
-        let f = BufReader::new(match File::open(path) {
-            Ok(x) => x,
-            Err(_) => return Err(GeometryLoadResult::FileOpenFailure),
-        });
-        let geo = {
-            let mut shape: BTreeSet<(isize, isize)> = Default::default();
-            for (row, line) in f.lines().map(Result::unwrap).enumerate() {
-                for (col, item) in line.split_whitespace().enumerate() {
-                    match item {
-                        x if x.len() != 1 => return Err(GeometryLoadResult::InvalidFormat("expected geometry element to be length 1")),
-                        "." => (),
-                        "@" => { shape.insert((row as isize, col as isize)); },
-                        _ => return Err(GeometryLoadResult::InvalidFormat("encountered unexpected character")),
-                    };
-                }
-            }
-            if shape.is_empty() {
-                return Err(GeometryLoadResult::InvalidFormat("shape is empty"));
-            }
-            Geometry::for_printing(&shape, &Default::default())
-        };
+    fn solver<Codes>(&mut self) -> GeometrySolver<'_, Codes>
+    where Codes: codesets::Set<(isize, isize)>
+    {
+        GeometrySolver::<Codes> {
+            shape: &self.geo.shape,
+            interior: &self.interior,
+            shape_with_padding: &self.shape_with_padding,
+            first_per_row: &self.first_per_row,
+            old_set: &mut self.geo.detectors,
+            
+            tessellation_maps: &self.tessellation_maps,
+            current_tessellation_map: &self.tessellation_maps[0],
+            src_basis_a: &mut self.basis_a,
+            src_basis_b: &mut self.basis_b,
+
+            codes: Default::default(),
+            needed: 0,
+        }
+    }
+}
+impl TryFrom<Geometry> for GeometryTessellation {
+    type Error = TessellationFailure;
+    fn try_from(geo: Geometry) -> Result<Self, Self::Error> {
         let interior: BTreeSet<_> = geo.shape.iter().filter(|&x| adj::OpenKing::at(*x).all(|p| geo.shape.contains(&p))).copied().collect();
         let first_per_row = {
             let mut s: HashSet<(isize, isize)> = Default::default();
@@ -490,7 +532,7 @@ impl GeometryTessellation {
                 }
             }
             if valid_tessellations.is_empty() {
-                return Err(GeometryLoadResult::TessellationFailure("no valid tessellations found"));
+                return Err(TessellationFailure::NoValidTessellations);
             }
             valid_tessellations.into_iter().map(|(a, (b, c))| (a.into_iter().collect(), b, c)).collect()
         };
@@ -502,25 +544,6 @@ impl GeometryTessellation {
             basis_a: first_basis_a,
             basis_b: first_basis_b,
         })
-    }
-    fn solver<Codes>(&mut self) -> GeometrySolver<'_, Codes>
-    where Codes: codesets::Set<(isize, isize)>
-    {
-        GeometrySolver::<Codes> {
-            shape: &self.geo.shape,
-            interior: &self.interior,
-            shape_with_padding: &self.shape_with_padding,
-            first_per_row: &self.first_per_row,
-            old_set: &mut self.geo.detectors,
-            
-            tessellation_maps: &self.tessellation_maps,
-            current_tessellation_map: &self.tessellation_maps[0],
-            src_basis_a: &mut self.basis_a,
-            src_basis_b: &mut self.basis_b,
-
-            codes: Default::default(),
-            needed: 0,
-        }
     }
 }
 impl Tessellation for GeometryTessellation {
@@ -1320,7 +1343,7 @@ fn parse_share(v: &str) -> f64 {
     }
 }
 
-fn tess_helper<T: Tessellation>(mut tess: T, set: &str, graph: &str, goal: &str) {
+fn tess_helper_calc<T: Tessellation>(tess: &mut T, set: &str, graph: &str, goal: &str) -> Option<usize> {
     macro_rules! calc_thresh {
         ($set:ident, $adj:ident) => {
             tess.try_satisfy::<codesets::$set<(isize, isize)>, adj::$adj>(Goal::MeetOrBeat(parse_thresh(goal)))
@@ -1353,7 +1376,7 @@ fn tess_helper<T: Tessellation>(mut tess: T, set: &str, graph: &str, goal: &str)
         }
     }
 
-    let res = match graph {
+    match graph {
         "king" => family!(OpenKing, ClosedKing),
         "tri" => family!(OpenTri, ClosedTri),
         "grid" => family!(OpenGrid, ClosedGrid),
@@ -1361,15 +1384,44 @@ fn tess_helper<T: Tessellation>(mut tess: T, set: &str, graph: &str, goal: &str)
         "tmb" => family!(OpenTMB, ClosedTMB),
 
         _ => crash!(2, "unknown graph: {}", graph),
-    };
-    match res {
-        Some(min) => {
-            let n = tess.size();
-            let d = util::gcd(min, n);
-            println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), tess);
-        },
+    }
+}
+fn tess_helper_print<T: Tessellation>(tess: &T, min: usize) {
+    let n = tess.size();
+    let d = util::gcd(min, n);
+    println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), tess);
+}
+fn tess_helper<T: Tessellation>(mut tess: T, set: &str, graph: &str, goal: &str) {
+    match tess_helper_calc(&mut tess, set, graph, goal) {
+        Some(min) => tess_helper_print(&tess, min),
         None => println!("no solution found"),
     }
+}
+fn entropy_helper(big_geo: Geometry, entropy_size: &str, set: &str, graph: &str, goal: &str) {
+    let entropy_size = match entropy_size.parse::<usize>() {
+        Ok(v) if v <= big_geo.size() => v,
+        Ok(v) => crash!(2, "entropy size cannot exceed size of geometry (geo size {}, entropy size {})", big_geo.size(), v),
+        Err(_) => crash!(2, "failed to parse '{}' as positive integer", entropy_size),
+    };
+    let mut done_geos: BTreeSet<_> = Default::default(); // set of geometies we've already tried
+
+    'next_geo: for geo in big_geo.sub_geometries(entropy_size) {
+        if !done_geos.insert(geo.to_string()) {
+            continue 'next_geo; // if we've already done this geometry, skip to next
+        }
+        let mut tess = match GeometryTessellation::try_from(geo) {
+            Ok(t) => t,
+            Err(_) => continue 'next_geo, // on tessellation failure, just move on to next geometry
+        };
+        match tess_helper_calc(&mut tess, set, graph, goal) {
+            Some(min) => {
+                tess_helper_print(&tess, min); // on successful search, print result and terminate
+                return;
+            }
+            None => (), // otherwise do nothing
+        }
+    }
+    println!("no solution found"); // if we get to this point then we've exhausted all our entropy and found no solutions
 }
 fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy) {
     let thresh = parse_share(thresh);
@@ -1466,6 +1518,24 @@ fn finite_helper(graph_path: &str, set: &str, count: &str) {
 }
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    let parse_dim = |val: &str| {
+        match val.parse::<usize>() {
+            Ok(v) if v > 0 => v,
+            Ok(_) => crash!(2, "dimension cannot be zero"),
+            Err(_) => crash!(2, "failed to parse '{}' as positive int", val),
+        }
+    };
+    let get_geometry = |path: &str| {
+        match Geometry::with_shape(path) {
+            Ok(g) => g,
+            Err(e) => match e {
+                GeometryWithShapeError::FileOpenFailure => crash!(2, "failed to open tessellation file {}", args[2]),
+                GeometryWithShapeError::InvalidFormat(msg) => crash!(2, "file {} was invalid format: {}", args[2], msg),
+            }
+        }
+    };
+
     match args.get(1).map(String::as_str) {
         Some("finite") => {
             if args.len() != 5 {
@@ -1489,8 +1559,8 @@ fn main() {
             if args.len() != 7 {
                 crash!(1, "usage: {} rect [rows] [cols] [set-type] [graph] [thresh]", args[0]);
             }
-            let rows: usize = args[2].parse().unwrap();
-            let cols: usize = args[3].parse().unwrap();
+            let rows: usize = parse_dim(&args[2]);
+            let cols: usize = parse_dim(&args[3]);
             if rows < 2 || cols < 2 {
                 crash!(2, "1xn and nx1 are not supported to avoid branch conditions");
             }
@@ -1501,16 +1571,14 @@ fn main() {
             if args.len() != 6 {
                 crash!(1, "usage: {} geo [geometry-file] [set-type] [graph] [thresh]", args[0]);
             }
-            let tess = match GeometryTessellation::with_shape(&args[2]) {
-                Ok(x) => x,
+            let geo = get_geometry(&args[2]);
+            let tess = match GeometryTessellation::try_from(geo) {
+                Ok(t) => t,
                 Err(e) => {
                     match e {
-                        GeometryLoadResult::FileOpenFailure => eprintln!("failed to open tessellation file {}", args[2]),
-                        GeometryLoadResult::InvalidFormat(msg) => eprintln!("file {} was invalid format: {}", args[2], msg),
-                        GeometryLoadResult::TessellationFailure(msg) => eprintln!("file {} had a tessellation failure: {}", args[2], msg),
-                    };
-                    crash!(2);
-                },
+                        TessellationFailure::NoValidTessellations => crash!(2, "file {} had no valid tessellations", args[2]),
+                    }
+                }
             };
             println!("loaded geometry: (size {})\n{}\nunique tilings: {}", tess.size(), tess.geo, tess.tessellation_maps.len());
             for (i, (_, a, b)) in tess.tessellation_maps.iter().enumerate() {
@@ -1518,6 +1586,22 @@ fn main() {
             }
             println!();
             tess_helper(tess, &args[3], &args[4], &args[5])
+        }
+        Some("entropy-rect") => {
+            if args.len() != 8 {
+                crash!(1, "usage: {} entropy-rect [rows] [cols] [entropy-size] [set-type] [graph] [thresh]", args[0]);
+            }
+            let rows: usize = parse_dim(&args[2]);
+            let cols: usize = parse_dim(&args[3]);
+            let big_geo = Geometry::rectangle(rows, cols);
+            entropy_helper(big_geo, &args[4], &args[5], &args[6], &args[7]);
+        }
+        Some("entropy-geo") => {
+            if args.len() != 7 {
+                crash!(1, "usage: {} entropy-geo [geometry-file] [entropy-size] [set-type] [graph] [thresh]", args[0]);
+            }
+            let big_geo = get_geometry(&args[2]);
+            entropy_helper(big_geo, &args[3], &args[4], &args[5], &args[6]);
         }
         _ => crash!(1, "usage: {} [finite|rect|geo|theo|theo-avg]", args[0]),
     };
