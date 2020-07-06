@@ -5,7 +5,6 @@ use std::fs::File;
 use std::path::Path;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::cmp;
 use std::mem;
 use std::convert::TryFrom;
 use itertools::Itertools;
@@ -28,6 +27,7 @@ mod adj;
 mod codesets;
 
 use adj::AdjacentIterator;
+use codesets::LOC;
 
 enum Goal {
     MeetOrBeat(f64),
@@ -43,7 +43,6 @@ impl Goal {
 }
 
 trait Solver {
-    fn get_locating_code<Adj>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> where Adj: adj::AdjacentIterator;
     fn is_old<Adj>(&mut self) -> bool where Adj: adj::AdjacentIterator;
     fn try_satisfy<Adj>(&mut self, goal: Goal) -> Option<usize> where Adj: adj::AdjacentIterator;
 }
@@ -59,7 +58,9 @@ struct RectSolver<'a, Codes> {
     base: RectSolverBase<'a, Codes>,
     phases: Vec<(isize, isize)>,
 }
-impl<Codes> RectSolverBase<'_, Codes> where Codes: codesets::Set<(isize, isize)> {
+impl<Codes> RectSolverBase<'_, Codes>
+where Codes: codesets::Set<Item = (isize, isize)>
+{
     fn id_to_inside(&self, row: isize, col: isize) -> usize {
         let col_fix = if row < 0 { col - self.src.phase.0 } else if row >= self.src.rows as isize { col + self.src.phase.0 } else { col };
         let row_fix = if col < 0 { row - self.src.phase.1 } else if col >= self.src.cols as isize { row + self.src.phase.1 } else { row };
@@ -68,44 +69,48 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: codesets::Set<(isize, isize)>
         let c = (col_fix + 2 * self.src.cols as isize) as usize % self.src.cols;
         r * self.src.cols + c
     }
-    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
+    fn get_locating_code<Adj>(&self, pos: (isize, isize)) -> Codes::LocatingCode
+    where Adj: adj::AdjacentIterator
+    {
         let mut v = Vec::with_capacity(9);
-        for x in Adj::new(pos.0, pos.1) {
+        for x in Adj::at(pos) {
             if self.src.old_set[self.id_to_inside(x.0, x.1)] {
                 v.push(x)
             }
         }
-        v
+        let is_detector = self.src.old_set[self.id_to_inside(pos.0, pos.1)];
+        Codes::LocatingCode::new(v, is_detector)
     }
-    fn is_old_interior_up_to<Adj: adj::AdjacentIterator>(&mut self, row: isize) -> bool {
+    fn is_old_interior_up_to<Adj>(&mut self, row: isize) -> bool
+    where Adj: adj::AdjacentIterator
+    {
         self.interior_codes.clear();
         for r in 1..row - 1 {
             for c in 1..self.src.cols as isize - 1 {
-                let is_detector = self.src.old_set[self.id_to_inside(r, c)];
-                let code = self.get_locating_code::<Adj>((r, c));
-                if !self.interior_codes.add(is_detector, code) {
+                let loc = self.get_locating_code::<Adj>((r, c));
+                if !self.interior_codes.add(loc) {
                     return false;
                 }
             }
         }
         true
     }
-    fn is_old_with_current_phase<Adj: adj::AdjacentIterator>(&mut self) -> bool {
+    fn is_old_with_current_phase<Adj>(&mut self) -> bool
+    where Adj: adj::AdjacentIterator
+    {
         self.codes.clear();
         for &r in &[-1, 0, self.src.rows as isize - 1, self.src.rows as isize] {
             for c in -1 ..= self.src.cols as isize {
-                let is_detector = self.src.old_set[self.id_to_inside(r, c)];
-                let code = self.get_locating_code::<Adj>((r, c));
-                if !self.interior_codes.can_add(is_detector, &code) || !self.codes.add(is_detector, code) {
+                let loc = self.get_locating_code::<Adj>((r, c));
+                if !self.interior_codes.can_add(&loc) || !self.codes.add(loc) {
                     return false;
                 }
             }
         }
         for r in 1 ..= self.src.rows as isize - 2 {
             for &c in &[-1, 0, self.src.cols as isize - 1, self.src.cols as isize] {
-                let is_detector = self.src.old_set[self.id_to_inside(r, c)];
-                let code = self.get_locating_code::<Adj>((r, c));
-                if !self.interior_codes.can_add(is_detector, &code) || !self.codes.add(is_detector, code) {
+                let loc = self.get_locating_code::<Adj>((r, c));
+                if !self.interior_codes.can_add(&loc) || !self.codes.add(loc) {
                     return false;
                 }
             }
@@ -114,9 +119,11 @@ impl<Codes> RectSolverBase<'_, Codes> where Codes: codesets::Set<(isize, isize)>
     }
 }
 impl<Codes> RectSolver<'_, Codes>
-where Codes: codesets::Set<(isize, isize)>
+where Codes: codesets::Set<Item = (isize, isize)>
 {
-    fn calc_old_min_interior<Adj: adj::AdjacentIterator>(&mut self, pos: usize) -> bool {
+    fn calc_old_min_interior<Adj>(&mut self, pos: usize) -> bool
+    where Adj: adj::AdjacentIterator
+    {
         if self.base.needed == self.base.prevs.len() {
             if self.is_old::<Adj>() {
                 return true;
@@ -143,12 +150,11 @@ where Codes: codesets::Set<(isize, isize)>
     }
 }
 impl<Codes> Solver for RectSolver<'_, Codes>
-where Codes: codesets::Set<(isize, isize)>
+where Codes: codesets::Set<Item = (isize, isize)>
 {
-    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
-        self.base.get_locating_code::<Adj>(pos)
-    }
-    fn is_old<Adj: adj::AdjacentIterator>(&mut self) -> bool {
+    fn is_old<Adj>(&mut self) -> bool
+    where Adj: adj::AdjacentIterator
+    {
         if self.base.is_old_interior_up_to::<Adj>(self.base.src.rows as isize) {
             for phase in &self.phases {
                 self.base.src.phase = *phase;
@@ -159,7 +165,9 @@ where Codes: codesets::Set<(isize, isize)>
         }
         false
     }
-    fn try_satisfy<Adj: adj::AdjacentIterator>(&mut self, goal: Goal) -> Option<usize> {
+    fn try_satisfy<Adj>(&mut self, goal: Goal) -> Option<usize>
+    where Adj: adj::AdjacentIterator
+    {
         for x in &mut self.base.src.old_set { *x = false; }
         self.base.prevs.clear();
         self.base.needed = goal.get_value(self.base.src.old_set.len());
@@ -171,7 +179,7 @@ where Codes: codesets::Set<(isize, isize)>
 trait Tessellation: fmt::Display {
     fn size(&self) -> usize;
     fn try_satisfy<Codes, Adj>(&mut self, goal: Goal) -> Option<usize>
-    where Codes: codesets::Set<(isize, isize)>, Adj: adj::AdjacentIterator;
+    where Codes: codesets::Set<Item = (isize, isize)>, Adj: adj::AdjacentIterator;
 }
 
 struct RectTessellation {
@@ -204,7 +212,7 @@ impl RectTessellation {
         }
     }
     fn solver<Codes>(&mut self) -> RectSolver<'_, Codes>
-    where Codes: codesets::Set<(isize, isize)>
+    where Codes: codesets::Set<Item = (isize, isize)>
     {
         let (r, c) = (self.rows, self.cols);
         RectSolver::<Codes> {
@@ -228,7 +236,7 @@ impl Tessellation for RectTessellation {
         self.old_set.len()
     }
     fn try_satisfy<Codes, Adj>(&mut self, goal: Goal) -> Option<usize>
-    where Codes: codesets::Set<(isize, isize)>, Adj: adj::AdjacentIterator
+    where Codes: codesets::Set<Item = (isize, isize)>, Adj: adj::AdjacentIterator
     {
         self.solver::<Codes>().try_satisfy::<Adj>(goal)
     }
@@ -345,15 +353,24 @@ struct GeometrySolver<'a, Codes> {
     needed: usize,
 }
 impl<'a, Codes> GeometrySolver<'a, Codes>
-where Codes: codesets::Set<(isize, isize)>
+where Codes: codesets::Set<Item = (isize, isize)>
 {
+    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Codes::LocatingCode {
+        let mut v = Vec::with_capacity(9);
+        for x in Adj::at(pos) {
+            if self.old_set.contains(self.current_tessellation_map.0.get(&x).unwrap()) {
+                v.push(x);
+            }
+        }
+        let is_detector = self.old_set.contains(self.current_tessellation_map.0.get(&pos).unwrap());
+        Codes::LocatingCode::new(v, is_detector)
+    }
     fn is_old_interior_up_to<Adj: adj::AdjacentIterator>(&mut self, row: isize) -> bool {
         self.codes.clear();
         for p in self.interior {
             if p.0 >= row - 1 { break; }
-            let is_detector = self.old_set.contains(p);
-            let code = self.get_locating_code::<Adj>(*p);
-            if !self.codes.add(is_detector, code) {
+            let loc = self.get_locating_code::<Adj>(*p);
+            if !self.codes.add(loc) {
                 return false;
             }
         }
@@ -388,17 +405,8 @@ where Codes: codesets::Set<(isize, isize)>
     }
 }
 impl<Codes> Solver for GeometrySolver<'_, Codes>
-where Codes: codesets::Set<(isize, isize)>
+where Codes: codesets::Set<Item = (isize, isize)>
 {
-    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Vec<(isize, isize)> {
-        let mut v = Vec::with_capacity(9);
-        for x in Adj::new(pos.0, pos.1) {
-            if self.old_set.contains(self.current_tessellation_map.0.get(&x).unwrap()) {
-                v.push(x);
-            }
-        }
-        v
-    }
     fn is_old<Adj: adj::AdjacentIterator>(&mut self) -> bool {
         'next_tess: for tess in self.tessellation_maps {
             self.current_tessellation_map = tess;
@@ -406,9 +414,8 @@ where Codes: codesets::Set<(isize, isize)>
             // check for validity
             self.codes.clear();
             for pos in self.shape_with_padding {
-                let is_detector = self.old_set.contains(self.current_tessellation_map.0.get(pos).unwrap());
-                let code = self.get_locating_code::<Adj>(*pos);
-                if !self.codes.add(is_detector, code) {
+                let loc = self.get_locating_code::<Adj>(*pos);
+                if !self.codes.add(loc) {
                     continue 'next_tess; // if this tess had a failure, on to next tess
                 }
             }
@@ -450,7 +457,7 @@ impl fmt::Display for GeometryTessellation {
 }
 impl GeometryTessellation {
     fn solver<Codes>(&mut self) -> GeometrySolver<'_, Codes>
-    where Codes: codesets::Set<(isize, isize)>
+    where Codes: codesets::Set<Item = (isize, isize)>
     {
         GeometrySolver::<Codes> {
             shape: &self.geo.shape,
@@ -551,7 +558,7 @@ impl Tessellation for GeometryTessellation {
         self.geo.shape.len()
     }
     fn try_satisfy<Codes, Adj>(&mut self, goal: Goal) -> Option<usize>
-    where Codes: codesets::Set<(isize, isize)>, Adj: adj::AdjacentIterator
+    where Codes: codesets::Set<Item = (isize, isize)>, Adj: adj::AdjacentIterator
     {
         self.solver::<Codes>().try_satisfy::<Adj>(goal)
     }
@@ -609,51 +616,46 @@ where Codes: Default
     strategy: TheoStrategy,
 }
 impl<'a, Codes> LowerBoundSearcher<'a, Codes>
-where Codes: codesets::Set<(isize, isize)>
+where Codes: codesets::Set<Item = (isize, isize)>
 {
-    fn get_locating_code<Adj>(&self, pos: (isize, isize)) -> Vec<(isize, isize)>
+    fn get_locating_code<Adj>(&self, pos: (isize, isize)) -> Codes::LocatingCode
     where Adj: AdjacentIterator
     {
         let mut v = Vec::with_capacity(9);
-        for p in Adj::new(pos.0, pos.1) {
+        for p in Adj::at(pos) {
             if self.detectors.contains(&p) {
                 v.push(p);
             }
         }
-        v
-    }
-    fn get_locating_code_size<Adj>(&self, pos: (isize, isize)) -> usize
-    where Adj: AdjacentIterator
-    {
-        Adj::new(pos.0, pos.1).filter(|p| self.detectors.contains(&p)).count()
+        let is_detector = self.detectors.contains(&pos);
+        Codes::LocatingCode::new(v, is_detector)
     }
     fn is_valid_over<Adj, T>(&mut self, range: T) -> bool
     where Adj: AdjacentIterator, T: Iterator<Item = (isize, isize)>
     {
         self.codes.clear();
         for p in range {
-            let is_detector = self.detectors.contains(&p);
-            let code = self.get_locating_code::<Adj>(p);
-            if !self.codes.add(is_detector, code) {
+            let loc = self.get_locating_code::<Adj>(p);
+            if !self.codes.add(loc) {
                 return false;
             }
         }
         true
     }
-    fn calc_share<Adj>(&self, pos: (isize, isize)) -> f64
-    where Adj: AdjacentIterator
+    fn calc_share<Adj, ShareAdj>(&self, pos: (isize, isize)) -> f64
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
         assert!(self.detectors.contains(&pos));
 
         let mut share = 0.0;
-        for p in Adj::new(pos.0, pos.1) {
-            let c = cmp::max(self.get_locating_code_size::<Adj>(p), Codes::MIN_DOM);
+        for p in ShareAdj::at(pos) {
+            let c = self.get_locating_code::<Adj>(p).dom();
             share += 1.0 / c as f64;
         }
         share
     }
-    fn calc_share_boundary_recursive_deep<Adj, P>(&mut self, pos: (isize, isize), lands: &BoundaryLands, mut far_pos: P) -> f64
-    where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
+    fn calc_share_boundary_recursive_deep<Adj, ShareAdj, P>(&mut self, pos: (isize, isize), lands: &BoundaryLands, mut far_pos: P) -> f64
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
     {
         match far_pos.next() {
             None => {
@@ -663,24 +665,24 @@ where Codes: codesets::Set<(isize, isize)>
                 }
 
                 // otherwise return the share
-                return self.calc_share::<Adj>(pos);
+                return self.calc_share::<Adj, ShareAdj>(pos);
             }
             Some(p) => {
                 self.detectors.insert(p);
-                let r1 = self.calc_share_boundary_recursive_deep::<Adj, _>(pos, lands, far_pos.clone());
+                let r1 = self.calc_share_boundary_recursive_deep::<Adj, ShareAdj, _>(pos, lands, far_pos.clone());
                 if r1 > self.thresh {
                     return r1; // if > thresh then max will be to - short circuit
                 }
                 self.detectors.remove(&p);
-                let r2 = self.calc_share_boundary_recursive_deep::<Adj, _>(pos, lands, far_pos);
+                let r2 = self.calc_share_boundary_recursive_deep::<Adj, ShareAdj, _>(pos, lands, far_pos);
 
                 // return max share found
                 return if r1 >= r2 { r1 } else { r2 };
             }
         }
     }
-    fn calc_share_boundary_recursive<Adj, P>(&mut self, pos: (isize, isize), lands: &BoundaryLands, mut ext_pos: P) -> f64
-    where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
+    fn calc_share_boundary_recursive<Adj, ShareAdj, P>(&mut self, pos: (isize, isize), lands: &BoundaryLands, mut ext_pos: P) -> f64
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
     {
         match ext_pos.next() {
             None => {
@@ -690,35 +692,35 @@ where Codes: codesets::Set<(isize, isize)>
                 }
 
                 // in this case we have a valid config, refer to the deeper logic to get the actual share value
-                return self.calc_share_boundary_recursive_deep::<Adj, _>(pos, lands, lands.far.iter().copied());
+                return self.calc_share_boundary_recursive_deep::<Adj, ShareAdj, _>(pos, lands, lands.far.iter().copied());
             }
             Some(p) => {
                 self.detectors.insert(p);
-                let r1 = self.calc_share_boundary_recursive::<Adj, _>(pos, lands, ext_pos.clone());
+                let r1 = self.calc_share_boundary_recursive::<Adj, ShareAdj, _>(pos, lands, ext_pos.clone());
                 if r1 > self.thresh {
                     return r1; // if > thresh max will be too - short circuit
                 }
                 self.detectors.remove(&p);
-                let r2 = self.calc_share_boundary_recursive::<Adj, _>(pos, lands, ext_pos);
+                let r2 = self.calc_share_boundary_recursive::<Adj, ShareAdj, _>(pos, lands, ext_pos);
 
                 // return max share found
                 return if r1 >= r2 { r1 } else { r2 };
             }
         }
     }
-    fn calc_share_boundary<Adj>(&mut self, pos: (isize, isize)) -> f64
-    where Adj: AdjacentIterator
+    fn calc_share_boundary<Adj, ShareAdj>(&mut self, pos: (isize, isize)) -> f64
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
         let boundary_map = self.boundary_map.clone();
         let boundary_map = boundary_map.borrow();
         let lands = boundary_map.get(&pos).unwrap();
 
         // compute the max share recursively
-        self.calc_share_boundary_recursive::<Adj, _>(pos, lands, lands.outer_close.iter().copied())
+        self.calc_share_boundary_recursive::<Adj, ShareAdj, _>(pos, lands, lands.outer_close.iter().copied())
     }
     // checks neighbor for averaging validity - returns x where x is either -1 (impossible config), max share of neighbor (<= thresh), or some undefined value > thresh
-    fn calc_share_neighbor_recursive<Adj, P>(&mut self, neighbor: (isize, isize), lands: &NeighborLands, mut ext_pos: P) -> f64
-    where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
+    fn calc_share_neighbor_recursive<Adj, ShareAdj, P>(&mut self, neighbor: (isize, isize), lands: &NeighborLands, mut ext_pos: P) -> f64
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
     {
         match ext_pos.next() {
             None => {
@@ -728,16 +730,16 @@ where Codes: codesets::Set<(isize, isize)>
                 }
                 
                 // otherwise return the share
-                return self.calc_share::<Adj>(neighbor);
+                return self.calc_share::<Adj, ShareAdj>(neighbor);
             }
             Some(p) => {
                 self.detectors.insert(p);
-                let r1 = self.calc_share_neighbor_recursive::<Adj, _>(neighbor, lands, ext_pos.clone());
+                let r1 = self.calc_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, ext_pos.clone());
                 if r1 > self.thresh {
                     return r1; // > thresh will cause max to be > thresh as well - short circuit
                 }
                 self.detectors.remove(&p);
-                let r2 = self.calc_share_neighbor_recursive::<Adj, _>(neighbor, lands, ext_pos);
+                let r2 = self.calc_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, ext_pos);
 
                 // return largest share found
                 return if r1 >= r2 { r1 } else { r2 };
@@ -745,18 +747,18 @@ where Codes: codesets::Set<(isize, isize)>
         }
     }
     // returns Some(x) where x is a valid max share of neighbor <= thresh, otherwise None
-    fn calc_share_neighbor<Adj>(&mut self, neighbor: (isize, isize)) -> f64
-    where Adj: AdjacentIterator
+    fn calc_share_neighbor<Adj, ShareAdj>(&mut self, neighbor: (isize, isize)) -> f64
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
         let neighbor_map = self.neighbor_map.clone();
         let neighbor_map = neighbor_map.borrow();
         let lands = neighbor_map.get(&neighbor).unwrap();
 
         // compute with recursive helper
-        self.calc_share_neighbor_recursive::<Adj, _>(neighbor, lands, lands.far.iter().copied())
+        self.calc_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, lands.far.iter().copied())
     }
-    fn can_average<Adj>(&mut self, center_share: f64) -> Option<f64>
-    where Adj: AdjacentIterator
+    fn can_average<Adj, ShareAdj>(&mut self, center_share: f64) -> Option<f64>
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
         let neighbor_map = self.neighbor_map.clone();
         let neighbor_map = neighbor_map.borrow();
@@ -773,7 +775,7 @@ where Codes: codesets::Set<(isize, isize)>
             }
 
             // otherwise find neighbor max share
-            match self.calc_share_neighbor::<Adj>(*neighbor.0) {
+            match self.calc_share_neighbor::<Adj, ShareAdj>(*neighbor.0) {
                 x if x.is_nan() || x.is_infinite() => panic!("invalid neighbor share: {}", x),
                 x if x < 0.0 => return Some(0.0), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
                 x if x < self.thresh => *neighbor.1 = x, // if strictly less than thresh update map value
@@ -806,7 +808,7 @@ where Codes: codesets::Set<(isize, isize)>
                 }
 
                 // compute share of boundary point if we haven't already done so
-                let boundary_share = *tested_boundaries.entry(*boundary_pos).or_insert_with(|| self.calc_share_boundary::<Adj>(*boundary_pos));
+                let boundary_share = *tested_boundaries.entry(*boundary_pos).or_insert_with(|| self.calc_share_boundary::<Adj, ShareAdj>(*boundary_pos));
                 match boundary_share {
                     x if x.is_nan() || x.is_infinite() => panic!("invalid boundary share: {}", x),
                     x if x < 0.0 => return Some(0.0), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
@@ -829,8 +831,8 @@ where Codes: codesets::Set<(isize, isize)>
         // if we get to this point then we didn't have enough to get average under thresh - pity we did all that work
         None
     }
-    fn calc_recursive<Adj, P>(&mut self, mut pos: P)
-    where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
+    fn calc_recursive<Adj, ShareAdj, P>(&mut self, mut pos: P)
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
     {
         match pos.next() {
             // if we have no positions remaining, check for first order validity
@@ -841,12 +843,12 @@ where Codes: codesets::Set<(isize, isize)>
                 }
 
                 // compute share of center
-                let share = self.calc_share::<Adj>(self.center);
+                let share = self.calc_share::<Adj, ShareAdj>(self.center);
                 
                 // compute average share - if share is over thresh, attempt to perform averaging, otherwise just use same value
                 let avg_share = {
                     if share > self.thresh && self.strategy != TheoStrategy::NoAveraging {
-                        match self.can_average::<Adj>(share) {
+                        match self.can_average::<Adj, ShareAdj>(share) {
                             Some(avg) => {
                                 assert_ge!(avg, 0.0);
                                 assert_le!(avg, self.thresh);
@@ -891,14 +893,14 @@ where Codes: codesets::Set<(isize, isize)>
             // otherwise recurse on both branches at this position
             Some(p) => {
                 self.detectors.insert(p);
-                self.calc_recursive::<Adj, _>(pos.clone());
+                self.calc_recursive::<Adj, ShareAdj, _>(pos.clone());
                 self.detectors.remove(&p);
-                self.calc_recursive::<Adj, _>(pos)
+                self.calc_recursive::<Adj, ShareAdj, _>(pos)
             }
         }
     }
-    fn calc<Adj>(&mut self, strategy: TheoStrategy, thresh: f64, pipe: Option<&'a mut dyn io::Write>) -> ((usize, usize), f64)
-    where Adj: AdjacentIterator
+    fn calc<Adj, ShareAdj>(&mut self, strategy: TheoStrategy, thresh: f64, pipe: Option<&'a mut dyn io::Write>) -> ((usize, usize), f64)
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
         let closed_interior = self.closed_interior.clone();
         let open_interior = self.open_interior.clone();
@@ -1017,7 +1019,7 @@ where Codes: codesets::Set<(isize, isize)>
             self.detectors.insert(*c);
 
             // perform center folding
-            self.calc_recursive::<Adj, _>(open_interior.borrow().iter().copied());
+            self.calc_recursive::<Adj, ShareAdj, _>(open_interior.borrow().iter().copied());
         }
 
         // if there were problems, print them if printing is enabled - already in sorted order for user convenience
@@ -1043,69 +1045,6 @@ where Codes: codesets::Set<(isize, isize)>
     }
 }
 
-#[test]
-fn test_lower_bound_searcher_sq_old_optimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(TheoStrategy::AverageWithNeighbors, 2.50001, None);
-    assert_lt!(res.1, 0.400001);
-    assert_gt!(res.1, 0.399999);
-    assert_eq!(res.0, (2, 5)); // we can find exact solution
-}
-#[test]
-fn test_lower_bound_searcher_sq_old_suboptimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenGrid>(TheoStrategy::AverageWithNeighbors, 2.49999, None);
-    assert_lt!(res.1, 0.400001);
-    assert_gt!(res.1, 0.399999);
-    assert_eq!(res.0, (2, 5)); // we can find exact solution (no averaging required)
-}
-
-#[test]
-fn test_lower_bound_searcher_tri_old_optimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(TheoStrategy::AverageWithNeighbors, 3.250001, None);
-    assert_lt!(res.1, 0.3076924); // we don't find exact, but must be less than proven lower bound
-}
-#[test]
-fn test_lower_bound_searcher_tri_old_suboptimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenTri>(TheoStrategy::AverageWithNeighbors, 3.249999, None);
-    assert_lt!(res.1, 0.3076923);
-    assert_ne!(res.0, (4, 13)); // averaging is required so this will be suboptimal
-}
-
-#[test]
-fn test_lower_bound_searcher_tri_det_optimal() {
-    let res = LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(TheoStrategy::AverageWithNeighbors, 2.000001, None);
-    assert_lt!(res.1, 0.50001);
-    assert_gt!(res.1, 0.49999);
-    assert_eq!(res.0, (1, 2)); // we can find exact solution
-}
-#[test]
-fn test_lower_bound_searcher_tri_det_suboptimal() {
-    let res = LowerBoundSearcher::<codesets::DET<(isize, isize)>>::new().calc::<adj::OpenTri>(TheoStrategy::AverageWithNeighbors, 1.999999, None);
-    assert_lt!(res.1, 0.49999);
-    assert_ne!(res.0, (1, 2)); // averaging is required so this will be suboptimal
-}
-
-#[test]
-fn test_lower_bound_searcher_hex_old_high_share() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(TheoStrategy::AverageWithNeighbors, 1000.0, None);
-    assert_lt!(res.1, 0.50001);
-    assert_gt!(res.1, 0.49999);
-    assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
-}
-#[test]
-fn test_lower_bound_searcher_hex_old_optimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(TheoStrategy::AverageWithNeighbors, 2.000001, None);
-    assert_lt!(res.1, 0.50001);
-    assert_gt!(res.1, 0.39999);
-    assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
-}
-#[test]
-fn test_lower_bound_searcher_hex_old_suboptimal() {
-    let res = LowerBoundSearcher::<codesets::OLD<(isize, isize)>>::new().calc::<adj::OpenHex>(TheoStrategy::AverageWithNeighbors, 1.999999, None);
-    assert_lt!(res.1, 0.50001);
-    assert_gt!(res.1, 0.49999);
-    assert_eq!(res.0, (1, 2)); // we can find exact solution (no averaging required)
-}
-
 #[derive(Debug)]
 enum AdjType {
     Open, Closed
@@ -1119,7 +1058,7 @@ struct FiniteGraphSolver<'a, Codes> {
     adj_type: AdjType,
 }
 impl<Codes> FiniteGraphSolver<'_, Codes>
-where Codes: codesets::Set<usize>
+where Codes: codesets::Set<Item = usize>
 {
     fn get_locating_code(&self, p: usize) -> Vec<usize> {
         let mut v = Vec::with_capacity(9);
@@ -1139,7 +1078,8 @@ where Codes: codesets::Set<usize>
         for i in 0..self.verts.len() {
             let is_detector = self.detectors.contains(&i);
             let code = self.get_locating_code(i);
-            if !self.codes.add(is_detector, code) {
+            let loc = Codes::LocatingCode::new(code, is_detector);
+            if !self.codes.add(loc) {
                 return false;
             }
         }
@@ -1254,7 +1194,7 @@ impl FiniteGraph {
         })
     }
     fn solver<Codes>(&mut self) -> FiniteGraphSolver<'_, Codes>
-    where Codes: codesets::Set<usize>
+    where Codes: codesets::Set<Item = usize>
     {
         FiniteGraphSolver {
             verts: &self.verts,
@@ -1423,28 +1363,29 @@ fn entropy_helper(big_geo: Geometry, entropy_size: &str, set: &str, graph: &str,
     }
     println!("no solution found"); // if we get to this point then we've exhausted all our entropy and found no solutions
 }
-fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy) {
+fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy, problem_pipe: Option<&mut dyn io::Write>) -> ((usize, usize), f64) {
     let thresh = parse_share(thresh);
     println!("lower bound for {} set on {} graph - {:?} thresh {}", set, graph, strategy, thresh);
 
     macro_rules! calc {
-        ($set:ident, $adj:ident) => {
-            LowerBoundSearcher::<codesets::$set<(isize, isize)>>::new().calc::<adj::$adj>(strategy, thresh, Some(&mut io::stdout()))
+        ($set:ident, $adj:ident, $shadj:ident) => {
+            LowerBoundSearcher::<codesets::$set<(isize, isize)>>::new().calc::<adj::$adj, adj::$shadj>(strategy, thresh, problem_pipe)
         }
     }
     macro_rules! family {
         ($open:ident, $closed:ident) => {
             match set {
-                "dom" => calc!(DOM, $closed),
-                "odom" => calc!(DOM, $open),
-                "ic" => calc!(OLD, $closed),
-                "red:ic" => calc!(RED, $closed),
-                "det:ic" => calc!(DET, $closed),
-                "err:ic" => calc!(ERR, $closed),
-                "old" => calc!(OLD, $open),
-                "red:old" => calc!(RED, $open),
-                "det:old" => calc!(DET, $open),
-                "err:old" => calc!(ERR, $open),
+                "dom" => calc!(DOM, $closed, $closed),
+                "odom" => calc!(DOM, $open, $open),
+                "ld" => calc!(LD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
+                "ic" => calc!(OLD, $closed, $closed),
+                "red:ic" => calc!(RED, $closed, $closed),
+                "det:ic" => calc!(DET, $closed, $closed),
+                "err:ic" => calc!(ERR, $closed, $closed),
+                "old" => calc!(OLD, $open, $open),
+                "red:old" => calc!(RED, $open, $open),
+                "det:old" => calc!(DET, $open, $open),
+                "err:old" => calc!(ERR, $open, $open),
                 
                 _ => crash!(2, "unknown set: {}", set),
             }
@@ -1461,6 +1402,7 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy) {
         _ => crash!(2, "unknown graph: {}", graph),
     };
     println!("found theo lower bound {}/{} ({})", n, k, f);
+    ((n, k), f)
 }
 fn finite_helper(graph_path: &str, set: &str, count: &str) {
     let mut g = match FiniteGraph::with_shape(graph_path) {
@@ -1547,13 +1489,13 @@ fn main() {
             if args.len() != 5 {
                 crash!(1, "usage: {} theo [set-type] [graph] [thresh]", args[0]);
             }
-            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::NoAveraging);
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::NoAveraging, Some(&mut io::stdout()));
         }
         Some("theo-avg") => {
             if args.len() != 5 {
                 crash!(1, "usage: {} theo-avg [set-type] [graph] [thresh]", args[0]);
             }
-            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::AverageWithNeighbors);
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::AverageWithNeighbors, Some(&mut io::stdout()));
         }
         Some("rect") => {
             if args.len() != 7 {
@@ -1605,4 +1547,131 @@ fn main() {
         }
         _ => crash!(1, "usage: {} [finite|rect|geo|theo|theo-avg]", args[0]),
     };
+}
+
+// --------------- //
+// -- hex tests -- //
+// --------------- //
+
+#[test]
+fn test_theo_ld_hex_optimal() {
+    let res = theo_helper("ld", "hex", "3.00001", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.333334);
+    assert_gt!(res.1, 0.333333);
+    assert_eq!(res.0, (1, 3)); // we can find exact value
+}
+#[test]
+fn test_theo_ld_hex_suboptimal() {
+    let res = theo_helper("ld", "hex", "2.99999", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.333334);
+    assert_gt!(res.1, 0.333333);
+    assert_eq!(res.0, (1, 3)); // we can find exact value
+}
+
+#[test]
+fn test_theo_ic_hex_optimal() {
+    let res = theo_helper("ic", "hex", "2.33334", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.4285715); // <= upper bound
+}
+#[test]
+fn test_theo_ic_hex_suboptimal() {
+    let res = theo_helper("ic", "hex", "2.33333", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.4285715); // <= upper bound
+}
+
+#[test]
+fn test_theo_old_hex_optimal() {
+    let res = theo_helper("old", "hex", "2.00001", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.500001);
+    assert_gt!(res.1, 0.499999);
+    assert_eq!(res.0, (1, 2)); // we can find exact value
+}
+#[test]
+fn test_theo_old_hex_suboptimal() {
+    let res = theo_helper("old", "hex", "1.99999", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.500001); // <= upper bound
+    assert_gt!(res.1, 0.499999);
+    assert_eq!(res.0, (1, 2)); // we can find exact value
+}
+
+// ---------------- //
+// -- grid tests -- //
+// ---------------- //
+
+#[test]
+fn test_theo_ld_sq_optimal() {
+    let res = theo_helper("ld", "grid", "3.33334", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.300001); // <= upper bound
+}
+#[test]
+fn test_theo_ld_sq_suboptimal() {
+    let res = theo_helper("ld", "grid", "3.33333", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.300001); // <= upper bound
+}
+
+#[test]
+fn test_theo_ic_sq_optimal() {
+    let res = theo_helper("ic", "grid", "2.857143", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.350001); // <= upper bound
+}
+#[test]
+fn test_theo_ic_sq_suboptimal() {
+    let res = theo_helper("ic", "grid", "2.857142", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.350001); // <= upper bound
+}
+
+#[test]
+fn test_theo_old_sq_optimal() {
+    let res = theo_helper("old", "grid", "2.50001", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.400001);
+    assert_gt!(res.1, 0.399999);
+    assert_eq!(res.0, (2, 5)); // we can find exact solution
+}
+#[test]
+fn test_theo_old_sq_suboptimal() {
+    let res = theo_helper("old", "grid", "2.49999", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.400001);
+    assert_gt!(res.1, 0.399999);
+    assert_eq!(res.0, (2, 5)); // we can find exact solution
+}
+
+// --------------- //
+// -- tri tests -- //
+// --------------- //
+
+#[test]
+fn test_theo_ld_tri_optimal() {
+    let res = theo_helper("ld", "tri", "4.38462", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.228071); // <= upper bound
+}
+#[test]
+fn test_theo_ld_tri_suboptimal() {
+    let res = theo_helper("ld", "tri", "4.38461", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.228071); // <= upper bound
+}
+
+#[test]
+fn test_theo_ic_tri_optimal() {
+    let res = theo_helper("ic", "tri", "4.00001", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.250001);
+    assert_gt!(res.1, 0.249999);
+    assert_eq!(res.0, (1, 4)); // we can find exact value
+}
+#[test]
+fn test_theo_ic_tri_suboptimal() {
+    let res = theo_helper("ic", "tri", "3.99999", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.250001);
+    assert_gt!(res.1, 0.249999);
+    assert_eq!(res.0, (1, 4)); // we can find exact value
+}
+
+#[test]
+fn test_theo_old_tri_optimal() {
+    let res = theo_helper("old", "tri", "3.250001", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.307693);
+}
+#[test]
+fn test_theo_old_tri_suboptimal() {
+    let res = theo_helper("old", "tri", "3.249999", TheoStrategy::AverageWithNeighbors, None);
+    assert_lt!(res.1, 0.307693);
 }
