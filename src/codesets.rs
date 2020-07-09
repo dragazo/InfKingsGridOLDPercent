@@ -126,6 +126,79 @@ where T: Ord + Default + Clone + Debug
 }
 
 #[derive(Default, Clone, Debug, PartialEq)]
+pub struct DETLD<T>
+where T: Ord
+{
+    detector_codes: BTreeSet<Vec<T>>,
+    non_detector_codes: BTreeSet<Vec<T>>,
+}
+impl<T> Set for DETLD<T>
+where T: Ord + Default + Clone + Debug
+{
+    type Item = T;
+    type LocatingCode = LDLOC<T>;
+
+    fn clear(&mut self) {
+        self.non_detector_codes.clear();
+        self.detector_codes.clear();
+    }
+    fn can_add(&self, loc: &Self::LocatingCode) -> bool {
+        if loc.is_detector {
+            // detectors must be at least 1-open-dominated
+            if loc.code.len() < 1 {
+                return false;
+            }
+            // must be 1-open-distinguished from other detectors
+            if self.detector_codes.contains(&loc.code) {
+                return false;
+            }
+            // must be asymmetrically sharp distinguished from non-detectors
+            for other in self.non_detector_codes.iter() {
+                let eq = util::count_equal(&loc.code, other);
+                if other.len() - eq < 2 && loc.code.len() - eq < 1 {
+                    return false;
+                }
+            }
+        }
+        else {
+            // non-detectors must be at least 2-open-dominated
+            if loc.code.len() < 2 {
+                return false;
+            }
+            // must be asymmetrically sharp distinguished from detectors
+            for other in self.detector_codes.iter() {
+                let eq = util::count_equal(&loc.code, other);
+                if loc.code.len() - eq < 2 && other.len() - eq < 1 {
+                    return false;
+                }
+            }
+            // must be 2-sharp distinguished from other non-detectors
+            for other in self.non_detector_codes.iter() {
+                if util::max_diff(&loc.code, other) < 2 {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    fn add(&mut self, loc: Self::LocatingCode) -> bool {
+        if self.can_add(&loc) {
+            // if it's valid add it in the right place (very important, otherwise constraints are broken)
+            if loc.is_detector {
+                self.detector_codes.insert(loc.code);
+            }
+            else {
+                self.non_detector_codes.insert(loc.code);
+            }
+            true
+        }
+        else {
+            false
+        }
+    }
+}
+
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct OLD<T>
 where T: Ord
 {
@@ -168,8 +241,7 @@ where T: Ord + Default + Clone + Debug
     fn can_add(&self, loc: &Self::LocatingCode) -> bool {
         if loc.code.len() < 2 { return false; }
         for other in &self.codes {
-            let equal = util::count_equal(other, &loc.code);
-            if other.len() + loc.code.len() - 2 * equal < 2 {
+            if util::symmetric_diff(other, &loc.code) < 2 {
                 return false;
             }
         }
@@ -200,8 +272,7 @@ where T: Ord + Default + Clone + Debug
     fn can_add(&self, loc: &Self::LocatingCode) -> bool {
         if loc.code.len() < 2 { return false; }
         for other in &self.codes {
-            let equal = util::count_equal(other, &loc.code);
-            if equal + 2 > other.len() && equal + 2 > loc.code.len() {
+            if util::max_diff(other, &loc.code) < 2 {
                 return false;
             }
         }
@@ -286,6 +357,74 @@ fn test_det_set() {
     assert_eq!(s.codes.len(), 4);
     assert!(s.add(C::new(vec![(0, 4), (1, 5), (1, 6)], false)));
     assert_eq!(s.codes.len(), 5);
+}
+
+#[test]
+fn test_detld_set() {
+    type S = DETLD<i32>;
+    type C = <S as Set>::LocatingCode;
+
+    let mut s = S::default();
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(!s.add(C::new(vec![], true)));
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+    
+    assert!(!s.add(C::new(vec![], false)));
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(!s.add(C::new(vec![1], false)));
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(s.add(C::new(vec![1], true)));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(!s.add(C::new(vec![1], true)));
+    assert!(!s.add(C::new(vec![1], false)));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(s.add(C::new(vec![2, 3], false)));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(!s.add(C::new(vec![2, 3], true)));
+    assert!(!s.add(C::new(vec![2, 3], false)));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(!s.add(C::new(vec![2, 4], false)));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(s.add(C::new(vec![2, 4, 5], false)));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 2);
+
+    assert!(!s.add(C::new(vec![1, 6], false)));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 2);
+
+    assert!(s.add(C::new(vec![1, 6, 7], false)));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 3);
+
+    assert!(s.add(C::new(vec![10, 11], true)));
+    assert_eq!(s.detector_codes.len(), 2);
+    assert_eq!(s.non_detector_codes.len(), 3);
+
+    assert!(!s.add(C::new(vec![3], true)));
+    assert_eq!(s.detector_codes.len(), 2);
+    assert_eq!(s.non_detector_codes.len(), 3);
+
+    assert!(s.add(C::new(vec![20], true)));
+    assert_eq!(s.detector_codes.len(), 3);
+    assert_eq!(s.non_detector_codes.len(), 3);
 }
 
 #[test]

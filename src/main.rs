@@ -1302,6 +1302,7 @@ fn tess_helper_calc<T: Tessellation>(tess: &mut T, set: &str, graph: &str, goal:
                 "edom" => calc_exactly!(EDOM, $closed),
                 "eodom" => calc_exactly!(EDOM, $open),
                 "ld" => calc_thresh!(LD, $open),
+                "det:ld" => calc_thresh!(DETLD, $open),
                 "ic" => calc_thresh!(OLD, $closed),
                 "red:ic" => calc_thresh!(RED, $closed),
                 "det:ic" => calc_thresh!(DET, $closed),
@@ -1378,6 +1379,7 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy, pro
                 "dom" => calc!(DOM, $closed, $closed),
                 "odom" => calc!(DOM, $open, $open),
                 "ld" => calc!(LD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
+                "det:ld" => calc!(DETLD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
                 "ic" => calc!(OLD, $closed, $closed),
                 "red:ic" => calc!(RED, $closed, $closed),
                 "det:ic" => calc!(DET, $closed, $closed),
@@ -1440,6 +1442,7 @@ fn finite_helper(graph_path: &str, set: &str, count: &str) {
         "edom" => calc!(EDOM, Closed),
         "eodom" => calc!(EDOM, Open),
         "ld" => calc!(LD, Open),
+        "det:ld" => calc!(DETLD, Open),
         "ic" => calc!(OLD, Closed),
         "red:ic" => calc!(RED, Closed),
         "det:ic" => calc!(DET, Closed),

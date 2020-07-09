@@ -1,3 +1,5 @@
+use std::cmp;
+
 pub fn modulus(a: isize, b: isize) -> usize {
     assert!(b > 0);
     let t = a % b;
@@ -97,6 +99,60 @@ fn test_count_equal() {
     assert_eq!(count_equal(&[1002, 1044, 1843, 2948, 1934], &[10, 100, 1000]), 0);
     assert_eq!(count_equal(&[1000, 1002, 1044, 1843, 2948, 1934], &[10, 100, 1000]), 1);
     assert_eq!(count_equal(&[999, 1000, 1002, 1044, 1843, 2948, 1934], &[10, 100, 1000]), 1);
+}
+
+pub fn symmetric_diff<T>(a: &[T], b: &[T]) -> usize
+where T: PartialOrd
+{
+    let equal = count_equal(a, b);
+    a.len() + b.len() - 2 * equal
+}
+#[test]
+fn test_sym_diff() {
+    assert_eq!(symmetric_diff(&[1, 2, 3], &[1, 2, 3]), 0);
+    assert_eq!(symmetric_diff(&[1, 6, 7], &[1, 2, 8]), 4);
+    assert_eq!(symmetric_diff(&[1, 6, 8], &[1, 2, 8]), 2);
+    assert_eq!(symmetric_diff(&[1, 6, 8], &[2, 9, 11]), 6);
+    assert_eq!(symmetric_diff(&[8], &[1, 2, 8, 10]), 3);
+    assert_eq!(symmetric_diff(&[7], &[1, 2, 8, 10]), 5);
+    assert_eq!(symmetric_diff(&[], &[1, 2]), 2);
+    assert_eq!(symmetric_diff(&[0i32;0], &[]), 0);
+
+    assert_eq!(symmetric_diff(&[1, 2, 3], &[1, 2, 3]), 0);
+    assert_eq!(symmetric_diff(&[1, 2, 8], &[1, 6, 7]), 4);
+    assert_eq!(symmetric_diff(&[1, 2, 8], &[1, 6, 8]), 2);
+    assert_eq!(symmetric_diff(&[2, 9, 11], &[1, 6, 8]), 6);
+    assert_eq!(symmetric_diff(&[1, 2, 8, 10], &[8]), 3);
+    assert_eq!(symmetric_diff(&[1, 2, 8, 10], &[7]), 5);
+    assert_eq!(symmetric_diff(&[1, 2], &[]), 2);
+    assert_eq!(symmetric_diff(&[], &[0i32;0]), 0);
+}
+
+pub fn max_diff<T>(a: &[T], b: &[T]) -> usize
+where T: PartialOrd
+{
+    let equal = count_equal(a, b);
+    cmp::max(a.len(), b.len()) - equal
+}
+#[test]
+fn test_max_diff() {
+    assert_eq!(max_diff(&[1, 2, 3], &[1, 2, 3]), 0);
+    assert_eq!(max_diff(&[1, 6, 7], &[1, 2, 8]), 2);
+    assert_eq!(max_diff(&[1, 6, 8], &[1, 2, 8]), 1);
+    assert_eq!(max_diff(&[1, 6, 8], &[2, 9, 11]), 3);
+    assert_eq!(max_diff(&[8], &[1, 2, 8, 10]), 3);
+    assert_eq!(max_diff(&[7], &[1, 2, 8, 10]), 4);
+    assert_eq!(max_diff(&[], &[1, 2]), 2);
+    assert_eq!(max_diff(&[0i32;0], &[]), 0);
+
+    assert_eq!(max_diff(&[1, 2, 3], &[1, 2, 3]), 0);
+    assert_eq!(max_diff(&[1, 2, 8], &[1, 6, 7]), 2);
+    assert_eq!(max_diff(&[1, 2, 8], &[1, 6, 8]), 1);
+    assert_eq!(max_diff(&[2, 9, 11], &[1, 6, 8]), 3);
+    assert_eq!(max_diff(&[1, 2, 8, 10], &[8]), 3);
+    assert_eq!(max_diff(&[1, 2, 8, 10], &[7]), 4);
+    assert_eq!(max_diff(&[1, 2], &[]), 2);
+    assert_eq!(max_diff(&[], &[0i32;0]), 0);
 }
 
 // source: https://doc.rust-lang.org/std/ops/trait.Div.html
