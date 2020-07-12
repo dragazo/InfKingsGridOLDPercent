@@ -581,6 +581,7 @@ struct NeighborLands {
 enum TheoStrategy {
     NoAveraging,
     AverageWithNeighbors,
+    DischargeToNeighbors,
 }
 impl Default for TheoStrategy {
     fn default() -> Self {
@@ -592,6 +593,7 @@ impl Default for TheoStrategy {
 struct LowerBoundProblem {
     center: (isize, isize),
     share: ordered_float::OrderedFloat<f64>,
+    avg_share: ordered_float::OrderedFloat<f64>,
     structure: String,
 }
 
@@ -757,79 +759,82 @@ where Codes: codesets::Set<Item = (isize, isize)>
         // compute with recursive helper
         self.calc_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, lands.far.iter().copied())
     }
-    fn can_average<Adj, ShareAdj>(&mut self, center_share: f64) -> Option<f64>
+    fn do_averaging<Adj, ShareAdj>(&mut self, center_share: f64) -> f64
     where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
-        let neighbor_map = self.neighbor_map.clone();
-        let neighbor_map = neighbor_map.borrow();
+        assert_gt!(center_share, self.thresh); // by hypothesis, center is a problem
 
-        // get the list of all averagee candidates and their share (default to -1 to denote invalid)
-        let mut neighbors: BTreeMap<(isize, isize), f64> = Adj::Open::at(self.center).filter(|p| self.detectors.contains(p)).map(|p| (p, -1.0)).collect();
-        let mut averagee_drops: BTreeSet<(isize, isize)> = Default::default();
+        // cache share values since they take forever to compute
+        let mut shares: HashMap<(isize, isize), f64> = HashMap::with_capacity(25);
+        shares.insert(self.center, center_share);
 
-        // go through the neighbors and find all the valid average candidates
-        for neighbor in neighbors.iter_mut() {
-            // if this detector neighbor and its detector neighbors which are open neighbors of center are all already dropped, don't even bother
-            if Adj::Closed::at(*neighbor.0).filter(|p| neighbor_map.contains_key(&p) && self.detectors.contains(p)).all(|p| averagee_drops.contains(&p)) {
+        // also keep track of averaging candidates
+        let mut candidates: Vec<(f64, (isize, isize))> = Default::default();
+
+        // for each neighbor of center which is a detector
+        for neighbor in Adj::Open::at(self.center) {
+            if !self.detectors.contains(&neighbor) {
                 continue;
             }
 
-            // otherwise find neighbor max share
-            match self.calc_share_neighbor::<Adj, ShareAdj>(*neighbor.0) {
+            // compute share of neighbor and store in cache
+            let share = match self.calc_share_neighbor::<Adj, ShareAdj>(neighbor) {
                 x if x.is_nan() || x.is_infinite() => panic!("invalid neighbor share: {}", x),
-                x if x < 0.0 => return Some(0.0), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
-                x if x < self.thresh => *neighbor.1 = x, // if strictly less than thresh update map value
-                x if x == self.thresh => { averagee_drops.insert(*neighbor.0); }, // if equal to thresh drop ourself but not neighbors (we're not useful but also not problematic)
-                _ => averagee_drops.extend(Adj::Closed::at(*neighbor.0)), // if higher than thresh drop ourself and our neighbors (we're problematic)
+                x if x < 0.0 => return 0.0, // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
+                x => x,
+            };
+            shares.insert(neighbor, share);
+
+            // if this is strictly less than thresh it's an averaging candidate
+            if share < self.thresh {
+                candidates.push((share, neighbor));
             }
         }
-        // remove all failed candidates
-        for x in averagee_drops.into_iter() {
-            neighbors.remove(&x);
-        }
 
-        // gather up all the valid averagees and sort by ascending share (use position to break ties just to guarantee invariant exec order)
-        let mut averagees: Vec<(f64, (isize, isize))> = neighbors.into_iter().map(|(a, b)| (b, a)).collect();
-        assert!(averagees.iter().all(|(sh, _)| *sh >= 0.0 && *sh < self.thresh));
-        averagees.sort_by(|x, y| x.partial_cmp(y).unwrap());
-
-        // keep a running track of the boundary share results
-        let mut tested_boundaries: BTreeMap<(isize, isize), f64> = Default::default();
+        //  sort averagee candidates by ascending share (use position to break ties just to guarantee invariant exec order)
+        candidates.sort_by(|x, y| x.partial_cmp(y).unwrap());
         
-        // go through the averagees and compute running average
-        let mut sum = center_share;
-        let mut count = 1.0;
-        'average_loop: for (sh, p) in averagees.into_iter() {
-            // examine all of its boundary points
-            for boundary_pos in neighbor_map.get(&p).unwrap().inner_close.iter() {
-                // if it's not a detector it's not a problem - doesn't have a share value
-                if !self.detectors.contains(boundary_pos) {
+        // go through the average candidates and keep track of working share as we do averaging/discharging
+        let mut working_share = center_share;
+        'next_candidate: for (share, neighbor) in candidates {
+            // look at each of my adjacent detectors and keep track of how many problems i'm next to
+            let mut adj_problems = 0;
+            for other in Adj::Open::at(neighbor) {
+                if !self.detectors.contains(&other) {
                     continue;
                 }
 
-                // compute share of boundary point if we haven't already done so
-                let boundary_share = *tested_boundaries.entry(*boundary_pos).or_insert_with(|| self.calc_share_boundary::<Adj, ShareAdj>(*boundary_pos));
-                match boundary_share {
+                // compute its share - use cache for lookups when possible (at this point center and neighbors are in cache, so only misses are boundary points)
+                let sh = match *shares.entry(other).or_insert_with(|| self.calc_share_boundary::<Adj, ShareAdj>(other)) {
                     x if x.is_nan() || x.is_infinite() => panic!("invalid boundary share: {}", x),
-                    x if x < 0.0 => return Some(0.0), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
-                    x if x <= self.thresh => (), // if no larger than thesh then we're ok so far
-                    _ => continue 'average_loop, // otherwise larger than thresh, so we can't use this averagee - on to the next
+                    x if x < 0.0 => return 0.0, // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
+                    x => x,
+                };
+
+                // if this is strictly larger than thresh it's a problem
+                if sh > self.thresh {
+                    adj_problems += 1;
+
+                    // if this exceeds 1 and we're using averaging, stop here
+                    if adj_problems > 1 && self.strategy == TheoStrategy::AverageWithNeighbors {
+                        continue 'next_candidate;
+                    }
                 }
             }
+            assert_ne!(adj_problems, 0); // this should never be zero because by hypothesis center itself is a problem
 
-            // if we get to this point then all of p's neighbors are share no larger than thresh, so we can use this for averaging
-            sum += sh;
-            count += 1.0;
+            // compute the total amount of safe discharge (we conservatively only allow uniform discharge into any non-problem neighbor)
+            let max_safe_discharge = (self.thresh - share) / (adj_problems as f64);
 
-            // if average is now no larger than thresh then we're done
-            let avg = sum / count;
-            if avg <= self.thresh {
-                return Some(avg);
+            // apply maximum safe discharging - if we drop down to or below the target thresh, we're done - yay!
+            working_share -= max_safe_discharge;
+            if working_share <= self.thresh {
+                return working_share;
             }
         }
 
-        // if we get to this point then we didn't have enough to get average under thresh - pity we did all that work
-        None
+        // if we get to this point then we didn't have enough to meet thresh - return the best we could do
+        return working_share;
     }
     fn calc_recursive<Adj, ShareAdj, P>(&mut self, mut pos: P)
     where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
@@ -845,17 +850,13 @@ where Codes: codesets::Set<Item = (isize, isize)>
                 // compute share of center
                 let share = self.calc_share::<Adj, ShareAdj>(self.center);
                 
-                // compute average share - if share is over thresh, attempt to perform averaging, otherwise just use same value
+                // compute average share - if share is over thresh, attempt to perform averaging if enabled, otherwise just use same value
                 let avg_share = {
                     if share > self.thresh && self.strategy != TheoStrategy::NoAveraging {
-                        match self.can_average::<Adj, ShareAdj>(share) {
-                            Some(avg) => {
-                                assert_ge!(avg, 0.0);
-                                assert_le!(avg, self.thresh);
-                                avg
-                            }
-                            None => share,
-                        }
+                        let avg = self.do_averaging::<Adj, ShareAdj>(share);
+                        assert_ge!(avg, 0.0); // should be valid
+                        assert_le!(avg, share); // should never be worse than we started with
+                        avg
                     }
                     else { share }
                 };
@@ -875,6 +876,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
                             let problem = LowerBoundProblem {
                                 center: self.center,
                                 share: share.into(),
+                                avg_share: avg_share.into(),
                                 structure,
                             };
 
@@ -1027,7 +1029,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             match self.pipe {
                 Some(ref mut f) => {
                     for p in self.problems.iter() {
-                        writeln!(f, "problem: {} (center {:?})\n{}", p.share, p.center, p.structure).unwrap();
+                        writeln!(f, "problem: {} ({}) (center {:?})\n{}", p.share, p.avg_share, p.center, p.structure).unwrap();
                     }
                     writeln!(f, "total problems: {}", self.problems.len()).unwrap();
                 },
@@ -1499,6 +1501,12 @@ fn main() {
                 crash!(1, "usage: {} theo-avg [set-type] [graph] [thresh]", args[0]);
             }
             theo_helper(&args[2], &args[3], &args[4], TheoStrategy::AverageWithNeighbors, Some(&mut io::stdout()));
+        }
+        Some("theo-dis") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} theo-avg [set-type] [graph] [thresh]", args[0]);
+            }
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::DischargeToNeighbors, Some(&mut io::stdout()));
         }
         Some("rect") => {
             if args.len() != 7 {
