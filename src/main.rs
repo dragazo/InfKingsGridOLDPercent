@@ -81,7 +81,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             }
         }
         let is_detector = self.src.old_set[self.id_to_inside(pos.0, pos.1)];
-        Codes::LocatingCode::new(v, is_detector)
+        Codes::LocatingCode::new(pos, is_detector, v)
     }
     fn is_old_interior_up_to<Adj>(&mut self, row: isize) -> bool
     where Adj: adj::AdjacentIterator
@@ -365,7 +365,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             }
         }
         let is_detector = self.old_set.contains(self.current_tessellation_map.0.get(&pos).unwrap());
-        Codes::LocatingCode::new(v, is_detector)
+        Codes::LocatingCode::new(pos, is_detector, v)
     }
     fn is_old_interior_up_to<Adj: adj::AdjacentIterator>(&mut self, row: isize) -> bool {
         self.codes.clear();
@@ -658,7 +658,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             }
         }
         let is_detector = self.detectors.contains(&pos);
-        Codes::LocatingCode::new(v, is_detector)
+        Codes::LocatingCode::new(pos, is_detector, v)
     }
     #[must_use]
     fn is_valid_over<Adj, T>(&mut self, range: T) -> bool
@@ -1119,7 +1119,7 @@ struct FiniteGraphSolver<'a, Codes> {
 impl<Codes> FiniteGraphSolver<'_, Codes>
 where Codes: codesets::Set<Item = usize>
 {
-    fn get_locating_code(&self, p: usize) -> Vec<usize> {
+    fn get_raw_locating_code(&self, p: usize) -> Vec<usize> {
         let mut v = Vec::with_capacity(9);
         let adj = match self.adj_type {
             AdjType::Open => self.verts[p].open_adj.iter(),
@@ -1136,9 +1136,9 @@ where Codes: codesets::Set<Item = usize>
         self.codes.clear();
         for i in 0..self.verts.len() {
             let is_detector = self.detectors.contains(&i);
-            let code = self.get_locating_code(i);
-            let loc = Codes::LocatingCode::new(code, is_detector);
-            if !self.codes.add(loc) {
+            let v = self.get_raw_locating_code(i);
+            let code = Codes::LocatingCode::new(i, is_detector, v);
+            if !self.codes.add(code) {
                 return false;
             }
         }
@@ -1374,6 +1374,7 @@ fn tess_helper_calc<T: Tessellation>(tess: &mut T, set: &str, graph: &str, goal:
                 "edom" => calc_exactly!(EDOM, $closed),
                 "eodom" => calc_exactly!(EDOM, $open),
                 "ld" => calc_thresh!(LD, $open),
+                "red:ld" => calc_thresh!(REDLD, $open),
                 "det:ld" => calc_thresh!(DETLD, $open),
                 "ic" => calc_thresh!(OLD, $closed),
                 "red:ic" => calc_thresh!(RED, $closed),
@@ -1454,6 +1455,7 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy, mut
                 "dom" => calc!(DOM, $closed, $closed),
                 "odom" => calc!(DOM, $open, $open),
                 "ld" => calc!(LD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
+                "red:ld" => calc!(REDLD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
                 "det:ld" => calc!(DETLD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
                 "ic" => calc!(OLD, $closed, $closed),
                 "red:ic" => calc!(RED, $closed, $closed),
@@ -1515,6 +1517,7 @@ fn finite_helper(graph_path: &str, set: &str, count: &str) {
         "edom" => calc!(EDOM, Closed),
         "eodom" => calc!(EDOM, Open),
         "ld" => calc!(LD, Open),
+        "red:ld" => calc!(REDLD, Open),
         "det:ld" => calc!(DETLD, Open),
         "ic" => calc!(OLD, Closed),
         "red:ic" => calc!(RED, Closed),
@@ -1575,7 +1578,7 @@ fn main() {
         }
         Some("theo-dis") => {
             if args.len() != 5 {
-                crash!(1, "usage: {} theo-avg [set-type] [graph] [thresh]", args[0]);
+                crash!(1, "usage: {} theo-dis [set-type] [graph] [thresh]", args[0]);
             }
             theo_helper(&args[2], &args[3], &args[4], TheoStrategy::DischargeToNeighbors, Some(&mut io::stdout()));
         }
