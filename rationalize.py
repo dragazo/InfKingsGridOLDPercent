@@ -11,9 +11,8 @@ thresh = float(sys.argv[2])
 denom = 0
 while True:
 	denom += 1
-	approx = target * denom
-	for numer in (math.floor(approx), math.ceil(approx)):
-		v = numer / denom
-		if abs(v - target) <= thresh:
-				print(f"found {numer}/{denom} = {v}")
-				sys.exit(0)
+	numer = round(target * denom)
+	v = numer / denom
+	if abs(v - target) <= thresh:
+			print(f"found {numer}/{denom} = {v}")
+			sys.exit(0)

@@ -1,4 +1,5 @@
 use std::cmp;
+use num::{BigRational, BigInt, Zero};
 
 pub fn modulus(a: isize, b: isize) -> usize {
     assert!(b > 0);
@@ -189,4 +190,34 @@ fn test_is_sorted() {
     assert!(is_sorted(&[1, 3, 4]));
     assert!(!is_sorted(&[1, 4, 3]));
     assert!(!is_sorted(&[6, 3, 4]));
+}
+
+pub fn rationalize(val: &BigRational, thresh: &BigRational) -> BigRational {
+    let mut denom = BigInt::zero();
+    loop {
+        denom += 1;
+        let numer = (val * &denom).round();
+        let v = numer / &denom;
+        if num::abs(&v - val) <= *thresh {
+            return v;
+        }
+    }
+}
+#[test]
+fn test_rationalize() {
+    macro_rules! frac {
+        ($p:expr, $q:expr) => {
+            BigRational::new($p.into(), $q.into())
+        }
+    }
+
+    assert_eq!(rationalize(&frac!(2727272727272727i64, 10000000000000000i64), &frac!(1, 10000000)), frac!(3, 11));
+    assert_eq!(rationalize(&frac!(-2727272727272727i64, 10000000000000000i64), &frac!(1, 10000000)), frac!(-3, 11));
+    assert_ne!(rationalize(&frac!(2727272727272727i64, 10000000000000000i64), &frac!(1, 1)), frac!(3, 11));
+    assert_ne!(rationalize(&frac!(-2727272727272727i64, 10000000000000000i64), &frac!(1, 1)), frac!(-3, 11));
+
+    assert_eq!(rationalize(&frac!(397350993, 1000000000), &frac!(1, 1000000)), frac!(60, 151));
+    assert_eq!(rationalize(&frac!(-397350993, 1000000000), &frac!(1, 1000000)), frac!(-60, 151));
+    assert_ne!(rationalize(&frac!(397350993, 1000000000), &frac!(1, 1)), frac!(60, 151));
+    assert_ne!(rationalize(&frac!(-397350993, 1000000000), &frac!(1, 1)), frac!(-60, 151));
 }

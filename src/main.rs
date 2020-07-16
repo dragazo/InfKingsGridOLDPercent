@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::mem;
 use std::convert::TryFrom;
 use itertools::Itertools;
-use num::BigRational;
+use num::{BigRational, BigInt};
 use num::traits::{Zero, One};
 
 #[macro_use]
@@ -579,7 +579,7 @@ struct NeighborLands {
     far: Vec<(isize, isize)>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum TheoStrategy {
     NoAveraging,
     AverageWithNeighbors,
@@ -1481,6 +1481,26 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy, mut
         _ => crash!(2, "unknown graph: {}", graph),
     }
 }
+fn auto_theo_helper(set: &str, graph: &str, strategy: TheoStrategy) {
+    let two = BigInt::from(2);
+    
+    // we know the value is in (0, 1], so start a binary search
+    let mut low = BigRational::zero();
+    let mut high = BigRational::one();
+    let mut thresh = &high - &low;
+    loop {
+        thresh /= &two;
+        let mid = (&low + &high) / &two;
+        let rat = util::rationalize(&mid, &thresh);
+        println!("search space: ({}, {}]\nprediction: {}", low, high, rat);
+        if theo_helper(set, graph, &mid.to_string(), strategy, None) {
+            low = mid;
+        }
+        else {
+            high = mid;
+        }
+    }
+}
 fn finite_helper(graph_path: &str, set: &str, count: &str) {
     let mut g = match FiniteGraph::with_shape(graph_path) {
         Ok(g) => g,
@@ -1563,6 +1583,24 @@ fn main() {
                 crash!(1, "usage: {} finite [graph-file] [set-type] [set-size]", args[0]);
             }
             finite_helper(&args[2], &args[3], &args[4]);
+        }
+        Some("auto-theo") => {
+            if args.len() != 4 {
+                crash!(1, "usage: {} auto-theo [set-type] [graph]", args[0]);
+            }
+            auto_theo_helper(&args[2], &args[3], TheoStrategy::NoAveraging);
+        }
+        Some("auto-theo-avg") => {
+            if args.len() != 4 {
+                crash!(1, "usage: {} auto-theo-avg [set-type] [graph]", args[0]);
+            }
+            auto_theo_helper(&args[2], &args[3], TheoStrategy::AverageWithNeighbors);
+        }
+        Some("auto-theo-dis") => {
+            if args.len() != 4 {
+                crash!(1, "usage: {} auto-theo-dis [set-type] [graph]", args[0]);
+            }
+            auto_theo_helper(&args[2], &args[3], TheoStrategy::DischargeToNeighbors);
         }
         Some("theo") => {
             if args.len() != 5 {
