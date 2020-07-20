@@ -300,6 +300,95 @@ where T: Ord + Default + Clone + Debug
 }
 
 #[derive(Default, Clone, Debug, PartialEq)]
+pub struct ERRLD<T>
+where T: Ord
+{
+    detector_codes: Vec<(T, Vec<T>)>,
+    non_detector_codes: Vec<Vec<T>>,
+}
+impl<T> Set for ERRLD<T>
+where T: Ord + Default + Clone + Debug
+{
+    type Item = T;
+    type LocatingCode = REDLDLOC<T>;
+
+    fn clear(&mut self) {
+        self.non_detector_codes.clear();
+        self.detector_codes.clear();
+    }
+    fn can_add(&self, loc: &Self::LocatingCode) -> bool {
+        if loc.is_detector {
+            // detectors must be at least 2-open-dominated
+            if loc.code.len() < 2 {
+                return false;
+            }
+            // detectors must be 1-open-distinguished by something other than each other
+            for other in self.detector_codes.iter() {
+                let mut diff = util::symmetric_diff(&loc.code, &other.1);
+                if loc.code.contains(&other.0) {
+                    diff -= 1;
+                }
+                if other.1.contains(&loc.pos) {
+                    diff -= 1;
+                }
+                if diff < 1 {
+                    return false;
+                }
+            }
+            // detector/non-detectors must be 2-open-distinguished by something other than each other
+            for other in self.non_detector_codes.iter() {
+                let mut diff = util::symmetric_diff(&loc.code, other);
+                if other.contains(&loc.pos) {
+                    diff -= 1;
+                }
+                if diff < 2 {
+                    return false;
+                }
+            }
+        }
+        else {
+            // non-detectors must be at least 3-open-dominated
+            if loc.code.len() < 3 {
+                return false;
+            }
+            // detector/non-detectors must be 2-open-distinguished by something other than each other
+            for other in self.detector_codes.iter() {
+                let mut diff = util::symmetric_diff(&loc.code, &other.1);
+                if loc.code.contains(&other.0) {
+                    diff -= 1;
+                }
+                if diff < 2 {
+                    return false;
+                }
+            }
+            // non-detectors must be 3-open-distinguished
+            for other in self.non_detector_codes.iter() {
+                let diff = util::symmetric_diff(&loc.code, other);
+                if diff < 3 {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    fn add(&mut self, loc: Self::LocatingCode) -> bool {
+        if self.can_add(&loc) {
+            // if it's valid add it in the right place (very important, otherwise constraints are broken)
+            if loc.is_detector {
+                self.detector_codes.push((loc.pos, loc.code));
+            }
+            else {
+                self.non_detector_codes.push(loc.code);
+            }
+            true
+        }
+        else {
+            false
+        }
+    }
+}
+
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct OLD<T>
 where T: Ord
 {
@@ -616,6 +705,136 @@ fn test_detld_set() {
     assert!(s.add(C::new(0, true, vec![20])));
     assert_eq!(s.detector_codes.len(), 3);
     assert_eq!(s.non_detector_codes.len(), 3);
+}
+
+#[test]
+fn test_errld_set() {
+    type S = ERRLD<i32>;
+    type C = <S as Set>::LocatingCode;
+
+    let mut s = S::default();
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(!s.add(C::new(0, true, vec![])));
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(!s.add(C::new(0, true, vec![1])));
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(!s.add(C::new(0, false, vec![])));
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(!s.add(C::new(0, false, vec![101])));
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(!s.add(C::new(0, false, vec![101, 102])));
+    assert_eq!(s.detector_codes.len(), 0);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(s.add(C::new(0, true, vec![1, 2])));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 0);
+
+    assert!(s.add(C::new(100, false, vec![101, 102, 103])));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(!s.add(C::new(3, true, vec![1, 2])));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(!s.add(C::new(1, true, vec![0, 2])));
+    assert_eq!(s.detector_codes.len(), 1);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(s.add(C::new(1, true, vec![0, 2, 3])));
+    assert_eq!(s.detector_codes.len(), 2);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(s.add(C::new(4, true, vec![5, 6])));
+    assert_eq!(s.detector_codes.len(), 3);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(!s.add(C::new(101, true, vec![102, 103])));
+    assert_eq!(s.detector_codes.len(), 3);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(!s.add(C::new(101, true, vec![102, 103, 104])));
+    assert_eq!(s.detector_codes.len(), 3);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(s.add(C::new(101, true, vec![102, 103, 104, 105])));
+    assert_eq!(s.detector_codes.len(), 4);
+    assert_eq!(s.non_detector_codes.len(), 1);
+
+    assert!(s.add(C::new(200, false, vec![201, 202, 203])));
+    assert_eq!(s.detector_codes.len(), 4);
+    assert_eq!(s.non_detector_codes.len(), 2);
+
+    assert!(!s.add(C::new(204, false, vec![201, 202, 203])));
+    assert_eq!(s.detector_codes.len(), 4);
+    assert_eq!(s.non_detector_codes.len(), 2);
+
+    assert!(!s.add(C::new(204, false, vec![202, 203, 205])));
+    assert_eq!(s.detector_codes.len(), 4);
+    assert_eq!(s.non_detector_codes.len(), 2);
+
+    assert!(s.add(C::new(204, false, vec![202, 203, 205, 206])));
+    assert_eq!(s.detector_codes.len(), 4);
+    assert_eq!(s.non_detector_codes.len(), 3);
+
+    assert!(!s.add(C::new(50, false, vec![4, 5, 6])));
+    assert_eq!(s.detector_codes.len(), 4);
+    assert_eq!(s.non_detector_codes.len(), 3);
+
+    assert!(!s.add(C::new(50, false, vec![4, 5, 6, 7])));
+    assert_eq!(s.detector_codes.len(), 4);
+    assert_eq!(s.non_detector_codes.len(), 3);
+
+    assert!(s.add(C::new(50, false, vec![4, 5, 6, 7, 8])));
+    assert_eq!(s.detector_codes.len(), 4);
+    assert_eq!(s.non_detector_codes.len(), 4);
+
+    assert!(s.add(C::new(300, true, vec![301, 302])));
+    assert_eq!(s.detector_codes.len(), 5);
+    assert_eq!(s.non_detector_codes.len(), 4);
+
+    assert!(!s.add(C::new(310, false, vec![301, 302])));
+    assert_eq!(s.detector_codes.len(), 5);
+    assert_eq!(s.non_detector_codes.len(), 4);
+
+    assert!(!s.add(C::new(310, false, vec![301, 302, 303])));
+    assert_eq!(s.detector_codes.len(), 5);
+    assert_eq!(s.non_detector_codes.len(), 4);
+
+    assert!(s.add(C::new(310, false, vec![301, 302, 303, 304])));
+    assert_eq!(s.detector_codes.len(), 5);
+    assert_eq!(s.non_detector_codes.len(), 5);
+
+    assert!(s.add(C::new(410, false, vec![401, 402, 403, 404])));
+    assert_eq!(s.detector_codes.len(), 5);
+    assert_eq!(s.non_detector_codes.len(), 6);
+
+    assert!(s.add(C::new(400, true, vec![401, 402])));
+    assert_eq!(s.detector_codes.len(), 6);
+    assert_eq!(s.non_detector_codes.len(), 6);
+
+    assert!(s.add(C::new(510, false, vec![501, 502, 503])));
+    assert_eq!(s.detector_codes.len(), 6);
+    assert_eq!(s.non_detector_codes.len(), 7);
+
+    assert!(!s.add(C::new(500, true, vec![501, 502])));
+    assert_eq!(s.detector_codes.len(), 6);
+    assert_eq!(s.non_detector_codes.len(), 7);
+
+    assert!(s.add(C::new(500, true, vec![501, 502, 520])));
+    assert_eq!(s.detector_codes.len(), 7);
+    assert_eq!(s.non_detector_codes.len(), 7);
 }
 
 #[test]

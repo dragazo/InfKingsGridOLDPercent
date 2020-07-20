@@ -1376,6 +1376,7 @@ fn tess_helper_calc<T: Tessellation>(tess: &mut T, set: &str, graph: &str, goal:
                 "ld" => calc_thresh!(LD, $open),
                 "red:ld" => calc_thresh!(REDLD, $open),
                 "det:ld" => calc_thresh!(DETLD, $open),
+                "err:ld" => calc_thresh!(ERRLD, $open),
                 "ic" => calc_thresh!(OLD, $closed),
                 "red:ic" => calc_thresh!(RED, $closed),
                 "det:ic" => calc_thresh!(DET, $closed),
@@ -1457,6 +1458,7 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy, mut
                 "ld" => calc!(LD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
                 "red:ld" => calc!(REDLD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
                 "det:ld" => calc!(DETLD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
+                "err:ld" => calc!(ERRLD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
                 "ic" => calc!(OLD, $closed, $closed),
                 "red:ic" => calc!(RED, $closed, $closed),
                 "det:ic" => calc!(DET, $closed, $closed),
@@ -1492,7 +1494,7 @@ fn auto_theo_helper(set: &str, graph: &str, strategy: TheoStrategy) {
         thresh /= &two;
         let mid = (&low + &high) / &two;
         let rat = util::rationalize(&mid, &thresh);
-        println!("search space: ({}, {}]\nprediction: {}", low, high, rat);
+        println!("search space: [{}, {}]\nprediction: {}", low, high, rat);
         if theo_helper(set, graph, &mid.to_string(), strategy, None) {
             low = mid;
         }
@@ -1539,6 +1541,7 @@ fn finite_helper(graph_path: &str, set: &str, count: &str) {
         "ld" => calc!(LD, Open),
         "red:ld" => calc!(REDLD, Open),
         "det:ld" => calc!(DETLD, Open),
+        "err:ld" => calc!(ERRLD, Open),
         "ic" => calc!(OLD, Closed),
         "red:ic" => calc!(RED, Closed),
         "det:ic" => calc!(DET, Closed),
