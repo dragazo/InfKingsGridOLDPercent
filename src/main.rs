@@ -568,15 +568,13 @@ impl Tessellation for GeometryTessellation {
 
 #[derive(Default)]
 struct BoundaryLands {
-    peers: Vec<(isize, isize)>,
-    inner_close: Vec<(isize, isize)>,
-    outer_close: Vec<(isize, isize)>,
-    far: Vec<(isize, isize)>,
+    field: Vec<(isize, isize)>,
+    total_exterior: Vec<(isize, isize)>,
 }
 #[derive(Default)]
 struct NeighborLands {
-    inner_close: Vec<(isize, isize)>,
-    far: Vec<(isize, isize)>,
+    field: Vec<(isize, isize)>,
+    total_exterior: Vec<(isize, isize)>,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -610,6 +608,7 @@ struct TheoSearcher<'a, Codes> {
     center: (isize, isize),
     closed_interior: Rc<RefCell<BTreeSet<(isize, isize)>>>, // everything up to radius 2
     open_interior: Rc<RefCell<BTreeSet<(isize, isize)>>>,   // everything up to radius 2 except center
+    exterior: BTreeSet<(isize, isize)>, // everything at exactly radius 3
     detectors: BTreeSet<(isize, isize)>,
 
     neighbor_map: Rc<RefCell<BTreeMap<(isize, isize), NeighborLands>>>, // maps a neighbor of center (exactly radius 1) to outer points
@@ -630,6 +629,7 @@ where Codes: Default
             center: (0, 0),
             closed_interior: Default::default(),
             open_interior: Default::default(),
+            exterior: Default::default(),
             detectors: Default::default(),
 
             neighbor_map: Default::default(),
@@ -674,103 +674,6 @@ where Codes: codesets::Set<Item = (isize, isize)>
         true
     }
     #[must_use]
-    fn calc_min_dom_boundary_recursive_deep<Adj, P>(&mut self, pos: (isize, isize), lands: &BoundaryLands, mut far_pos: P) -> usize
-    where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
-    {
-        match far_pos.next() {
-            None => {
-                // if not valid don't even bother
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center).chain(lands.peers.iter().chain(lands.inner_close.iter()).copied())) {
-                    return usize::MAX; // if not valid return max val
-                }
-
-                // otherwise return the dom count
-                return self.get_locating_code::<Adj>(pos).dom();
-            }
-            Some(p) => {
-                self.detectors.insert(p);
-                let r1 = self.calc_min_dom_boundary_recursive_deep::<Adj, _>(pos, lands, far_pos.clone());
-                self.detectors.remove(&p);
-                let r2 = self.calc_min_dom_boundary_recursive_deep::<Adj, _>(pos, lands, far_pos);
-
-                // return min dom count found
-                return if r1 <= r2 { r1 } else { r2 };
-            }
-        }
-    }
-    #[must_use]
-    fn calc_min_dom_boundary_recursive<Adj, P>(&mut self, pos: (isize, isize), lands: &BoundaryLands, mut ext_pos: P) -> usize
-    where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
-    {
-        match ext_pos.next() {
-            None => {
-                // if it's not valid don't even bother inspecting further
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center).chain(lands.peers.iter().copied())) {
-                    return usize::MAX; // return max val to denote not valid
-                }
-
-                // in this case we have a valid config, refer to the deeper logic to get the actual dom value
-                return self.calc_min_dom_boundary_recursive_deep::<Adj, _>(pos, lands, lands.far.iter().copied());
-            }
-            Some(p) => {
-                self.detectors.insert(p);
-                let r1 = self.calc_min_dom_boundary_recursive::<Adj, _>(pos, lands, ext_pos.clone());
-                self.detectors.remove(&p);
-                let r2 = self.calc_min_dom_boundary_recursive::<Adj, _>(pos, lands, ext_pos);
-
-                // return min dom count found
-                return if r1 <= r2 { r1 } else { r2 };
-            }
-        }
-    }
-    #[must_use]
-    fn calc_min_dom_boundary<Adj>(&mut self, pos: (isize, isize)) -> usize
-    where Adj: AdjacentIterator
-    {
-        let boundary_map = self.boundary_map.clone();
-        let boundary_map = boundary_map.borrow();
-        let lands = boundary_map.get(&pos).unwrap();
-
-        // compute the max share recursively
-        self.calc_min_dom_boundary_recursive::<Adj, _>(pos, lands, lands.outer_close.iter().copied())
-    }
-    fn calc_min_dom_neighbor_recursive<Adj, P>(&mut self, neighbor: (isize, isize), lands: &NeighborLands, mut ext_pos: P) -> usize
-    where Adj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
-    {
-        match ext_pos.next() {
-            None => {
-                // if it's an invalid configuration, don't even bother looking at it
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center).chain(lands.inner_close.iter().copied())) {
-                    return usize::MAX; // return max val to denote not valid
-                }
-
-                // otherwise return the dom count
-                return self.get_locating_code::<Adj>(neighbor).dom();
-            }
-            Some(p) => {
-                self.detectors.insert(p);
-                let r1 = self.calc_min_dom_neighbor_recursive::<Adj, _>(neighbor, lands, ext_pos.clone());
-                self.detectors.remove(&p);
-                let r2 = self.calc_min_dom_neighbor_recursive::<Adj, _>(neighbor, lands, ext_pos);
-
-                // return smallest dom count found
-                return if r1 <= r2 { r1 } else { r2 };
-            }
-        }
-    }
-    // returns either the min dom count or usize::MAX if no valid configurations
-    #[must_use]
-    fn calc_min_dom_neighbor<Adj>(&mut self, neighbor: (isize, isize)) -> usize
-    where Adj: AdjacentIterator
-    {
-        let neighbor_map = self.neighbor_map.clone();
-        let neighbor_map = neighbor_map.borrow();
-        let lands = neighbor_map.get(&neighbor).unwrap();
-
-        // compute with recursive helper
-        self.calc_min_dom_neighbor_recursive::<Adj, _>(neighbor, lands, lands.far.iter().copied())
-    }
-    #[must_use]
     fn calc_share<Adj, ShareAdj>(&self, pos: (isize, isize)) -> Share
     where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
@@ -784,46 +687,18 @@ where Codes: codesets::Set<Item = (isize, isize)>
         share
     }
     #[must_use]
-    fn calc_max_or_over_thresh_share_boundary_recursive_deep<Adj, ShareAdj, P>(&mut self, pos: (isize, isize), lands: &BoundaryLands, mut far_pos: P) -> Share
-    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
-    {
-        match far_pos.next() {
-            None => {
-                // if not valid don't even bother
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center).chain(lands.peers.iter().chain(lands.inner_close.iter()).copied())) {
-                    return -Share::one(); // invalid config has no share - return invalid value
-                }
-
-                // otherwise return the share
-                return self.calc_share::<Adj, ShareAdj>(pos);
-            }
-            Some(p) => {
-                self.detectors.insert(p);
-                let r1 = self.calc_max_or_over_thresh_share_boundary_recursive_deep::<Adj, ShareAdj, _>(pos, lands, far_pos.clone());
-                if r1 > self.thresh {
-                    return r1; // if > thresh then max will be to - short circuit
-                }
-                self.detectors.remove(&p);
-                let r2 = self.calc_max_or_over_thresh_share_boundary_recursive_deep::<Adj, ShareAdj, _>(pos, lands, far_pos);
-
-                // return max share found
-                return if r1 >= r2 { r1 } else { r2 };
-            }
-        }
-    }
-    #[must_use]
     fn calc_max_or_over_thresh_share_boundary_recursive<Adj, ShareAdj, P>(&mut self, pos: (isize, isize), lands: &BoundaryLands, mut ext_pos: P) -> Share
     where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
     {
         match ext_pos.next() {
             None => {
-                // if it's not valid don't even bother inspecting further
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center).chain(lands.peers.iter().copied())) {
-                    return -Share::one(); // return -1 to denote no share (illegal config)
+                // if it's an invalid configuration, don't even bother looking at it
+                if !self.is_valid_over::<Adj, _>(self.closed_interior.clone().borrow().iter().chain(lands.field.iter()).copied()) {
+                    return -Share::one(); // return -1 to denote nothing (no share here at all)
                 }
 
-                // in this case we have a valid config, refer to the deeper logic to get the actual share value
-                return self.calc_max_or_over_thresh_share_boundary_recursive_deep::<Adj, ShareAdj, _>(pos, lands, lands.far.iter().copied());
+                // otherwise return the share
+                return self.calc_share::<Adj, ShareAdj>(pos);
             }
             Some(p) => {
                 self.detectors.insert(p);
@@ -849,8 +724,13 @@ where Codes: codesets::Set<Item = (isize, isize)>
         let boundary_map = boundary_map.borrow();
         let lands = boundary_map.get(&pos).unwrap();
 
+        // go ahead and prepare the total exterior before we start searching so we don't have to do it at every terminal node
+        for p in lands.total_exterior.iter() {
+            self.detectors.insert(*p);
+        }
+
         // compute the max share recursively
-        self.calc_max_or_over_thresh_share_boundary_recursive::<Adj, ShareAdj, _>(pos, lands, lands.outer_close.iter().copied())
+        self.calc_max_or_over_thresh_share_boundary_recursive::<Adj, ShareAdj, _>(pos, lands, lands.field.iter().copied())
     }
     #[must_use]
     fn calc_max_or_over_thresh_share_neighbor_recursive<Adj, ShareAdj, P>(&mut self, neighbor: (isize, isize), lands: &NeighborLands, mut ext_pos: P) -> Share
@@ -859,7 +739,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
         match ext_pos.next() {
             None => {
                 // if it's an invalid configuration, don't even bother looking at it
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center).chain(lands.inner_close.iter().copied())) {
+                if !self.is_valid_over::<Adj, _>(self.closed_interior.clone().borrow().iter().chain(lands.field.iter()).copied()) {
                     return -Share::one(); // return -1 to denote nothing (no share here at all)
                 }
                 
@@ -890,8 +770,13 @@ where Codes: codesets::Set<Item = (isize, isize)>
         let neighbor_map = neighbor_map.borrow();
         let lands = neighbor_map.get(&neighbor).unwrap();
 
+        // go ahead and prepare the total exterior before we start searching so we don't have to do it at every terminal node
+        for p in lands.total_exterior.iter() {
+            self.detectors.insert(*p);
+        }
+
         // compute with recursive helper
-        self.calc_max_or_over_thresh_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, lands.far.iter().copied())
+        self.calc_max_or_over_thresh_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, lands.field.iter().copied())
     }
     #[must_use]
     fn do_averaging<Adj, ShareAdj>(&mut self, center_share: &Share) -> Share
@@ -928,101 +813,46 @@ where Codes: codesets::Set<Item = (isize, isize)>
         //  sort averagee candidates by ascending share (use position to break ties just to guarantee invariant exec order)
         candidates.sort();
 
-        let try_correct = |this: &mut Self, shares: &mut HashMap<(isize, isize), Share>, candidates: &[(Share, (isize, isize))]| -> Share {
-            // go through the average candidates and keep track of working share as we do averaging/discharging
-            let mut working_share = center_share.clone();
-            'next_candidate: for (share, neighbor) in candidates {
-                // look at each of my adjacent detectors and keep track of how many problems i'm next to
-                let mut adj_problems = 0;
-                for other in Adj::Open::at(*neighbor) {
-                    if !this.detectors.contains(&other) {
-                        continue;
-                    }
-
-                    // compute its max share - use cache for lookups when possible (at this point center and neighbors are in cache, so only misses are boundary points)
-                    let sh = match shares.entry(other).or_insert_with(|| this.calc_max_or_over_thresh_share_boundary::<Adj, ShareAdj>(other)) {
-                        x if &*x < &Share::zero() => return Share::zero(), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
-                        x => x,
-                    };
-
-                    // if this is strictly larger than thresh it's a problem
-                    if &*sh > &this.thresh {
-                        adj_problems += 1;
-
-                        // if this exceeds 1 and we're using averaging, stop here
-                        if adj_problems > 1 && this.strategy == TheoStrategy::AverageWithNeighbors {
-                            continue 'next_candidate;
-                        }
-                    }
+        // go through the average candidates and keep track of working share as we do averaging/discharging
+        let mut working_share = center_share.clone();
+        'next_candidate: for (share, neighbor) in candidates {
+            // look at each of my adjacent detectors and keep track of how many problems i'm next to
+            let mut adj_problems = 0;
+            for other in Adj::Open::at(neighbor) {
+                if !self.detectors.contains(&other) {
+                    continue;
                 }
-                assert_ne!(adj_problems, 0); // this should never be zero because by hypothesis center itself is a problem
 
-                // compute the total amount of safe discharge (we conservatively only allow uniform discharge into any non-problem neighbor)
-                let max_safe_discharge = (&this.thresh - share) / Share::from_integer(adj_problems.into());
-                assert_gt!(max_safe_discharge, Share::zero());
-
-                // apply maximum safe discharging - if we drop down to or below the target thresh, we're done - yay!
-                working_share -= max_safe_discharge;
-                if &working_share <= &this.thresh {
-                    return working_share;
-                }
-            }
-            // otherwise we failed to correct - return the best we could do
-            working_share
-        };
-
-        // try to correct the large share problem with averaging/discharging - on success stop
-        {
-            let attempt = try_correct(self, &mut shares, &candidates);
-            if &attempt <= &self.thresh {
-                return attempt;
-            }
-        }
-
-        // otherwise it might be the case that by only expanding to radius 2 around neighbors we used an invalid high discharge outlet share - fix them
-        let mut doms: HashMap<(isize, isize), usize> = HashMap::with_capacity(25);
-        doms.insert(self.center, self.get_locating_code::<Adj>(self.center).dom());
-
-        // recompute candidate shares, but not necessary to recompute boundary shares
-        candidates.clear();
-        for neighbor in Adj::Open::at(self.center) {
-            // compute min dom and store in cache
-            let min_dom = match self.calc_min_dom_neighbor::<Adj>(neighbor) {
-                0 => return Share::zero(), // if not valid, just return 0 - should never happen due to previous logic, but just to be safe
-                x => x,
-            };
-            doms.insert(neighbor, min_dom);
-        }
-        for neighbor in Adj::Open::at(self.center) {
-            if !self.detectors.contains(&neighbor) {
-                continue;
-            }
-
-            // compute share of neighbor based on min dom counts
-            let mut sh = Share::zero();
-            for pos in ShareAdj::at(neighbor) {
-                let dom = match *doms.entry(pos).or_insert_with(|| self.calc_min_dom_boundary::<Adj>(pos)) {
-                    0 => return Share::zero(), // if not valid, just return 0 - should never happen due to previous logic, but just to be safe
+                // compute its max share - use cache for lookups when possible (at this point center and neighbors are in cache, so only misses are boundary points)
+                let sh = match shares.entry(other).or_insert_with(|| self.calc_max_or_over_thresh_share_boundary::<Adj, ShareAdj>(other)) {
+                    x if &*x < &Share::zero() => return Share::zero(), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
                     x => x,
                 };
-                sh += Share::new(1.into(), dom.into());
-            }
 
-            // and get the stored share value from shares (which was already calculated) - if we're better, replace it
-            let stored = shares.get_mut(&neighbor).unwrap();
-            if &sh < &*stored {
-                *stored = sh;
-            }
+                // if this is strictly larger than thresh it's a problem
+                if &*sh > &self.thresh {
+                    adj_problems += 1;
 
-            // if updated share is less than thresh, it is a candidate
-            if &*stored < &self.thresh {
-                candidates.push((stored.clone(), neighbor));
+                    // if this exceeds 1 and we're using averaging, stop here
+                    if adj_problems > 1 && self.strategy == TheoStrategy::AverageWithNeighbors {
+                        continue 'next_candidate;
+                    }
+                }
+            }
+            assert_ne!(adj_problems, 0); // this should never be zero because by hypothesis center itself is a problem
+
+            // compute the total amount of safe discharge (we conservatively only allow uniform discharge into any non-problem neighbor)
+            let max_safe_discharge = (&self.thresh - share) / Share::from_integer(adj_problems.into());
+            assert_gt!(max_safe_discharge, Share::zero());
+
+            // apply maximum safe discharging - if we drop down to or below the target thresh, we're done - yay!
+            working_share -= max_safe_discharge;
+            if &working_share <= &self.thresh {
+                return working_share;
             }
         }
-        candidates.sort();
-
-        // try to correct once more with updated values - just return whatever we get, as that's the best we can do
-        try_correct(self, &mut shares, &candidates)
+        // otherwise we failed to correct - return the best we could do
+        working_share
     }
     #[must_use]
     fn calc_recursive<Adj, ShareAdj, P>(&mut self, mut pos: P) -> SearchCommand
@@ -1031,8 +861,12 @@ where Codes: codesets::Set<Item = (isize, isize)>
         match pos.next() {
             // if we have no positions remaining, check for first order validity
             None => {
-                // if not valid on first order, ignore
-                if !self.is_valid_over::<Adj, _>(Adj::Closed::at(self.center)) {
+                // fill in the exterior
+                for p in self.exterior.iter() {
+                    self.detectors.insert(*p);
+                }
+                // if not valid over the ball2 iter field, ignore (invalid configuration)
+                if !self.is_valid_over::<Adj, _>(self.closed_interior.clone().borrow().iter().copied()) {
                     return SearchCommand::Continue;
                 }
 
@@ -1135,18 +969,19 @@ where Codes: codesets::Set<Item = (isize, isize)>
             println!("open interior:\n{}", Geometry::for_printing(&*open_interior.borrow(), &Default::default()));
 
             // generate exterior - everything at exactly radius 3
-            let exterior: BTreeSet<_> = {
+            {
                 let closed_interior = closed_interior.borrow();
-                closed_interior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p)).collect()
-            };
+                self.exterior.clear();
+                self.exterior.extend(closed_interior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p)));
+            }
 
             #[cfg(debug)]
-            println!("exterior:\n{}", Geometry::for_printing(&exterior, &Default::default()));
+            println!("exterior:\n{}", Geometry::for_printing(&*exterior.borrow(), &Default::default()));
 
             // generate boundary - everything at exactly radius 2
             let boundary: BTreeSet<_> = {
                 let closed_interior = closed_interior.borrow();
-                exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| closed_interior.contains(p)).collect()
+                self.exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| closed_interior.contains(p)).collect()
             };
 
             #[cfg(debug)]
@@ -1155,7 +990,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             // generate farlands - everything at exactly radius 4
             let farlands: BTreeSet<_> = {
                 let closed_interior = closed_interior.borrow();
-                exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p) && !exterior.contains(p)).collect()
+                self.exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p) && !self.exterior.contains(p)).collect()
             };
 
             #[cfg(debug)]
@@ -1164,18 +999,23 @@ where Codes: codesets::Set<Item = (isize, isize)>
             // generate neighbor map - maps neighbor of center to outer points
             {
                 let mut neighbor_map = neighbor_map.borrow_mut();
+                let closed_interior = closed_interior.borrow();
                 neighbor_map.clear();
                 for p in Adj::Open::at(*c) {
                     let ball2: BTreeSet<_> = Adj::Open::at(p).flat_map(|x| Adj::Closed::at(x)).collect();
-                    
+                    let ball3: BTreeSet<_> = ball2.iter().flat_map(|x| Adj::Closed::at(*x)).collect();
+
+                    let field: BTreeSet<_> = ball2.iter().filter(|&x| !closed_interior.contains(x)).copied().collect();
+                    let total_exterior: BTreeSet<_> = self.exterior.iter().chain(ball3.iter()).filter(|&x| !closed_interior.contains(x) && !field.contains(x)).copied().collect();
+
                     let lands = NeighborLands {
-                        inner_close: Adj::Open::at(p).filter(|x| boundary.contains(x)).collect(),
-                        far: ball2.iter().filter(|&x| exterior.contains(x)).copied().collect(),
+                        field: field.into_iter().collect(),
+                        total_exterior: total_exterior.into_iter().collect(),
                     };
                     #[cfg(debug)]
                     {
-                        println!("neighbor {:?} inner_close: {:?}", p, lands.inner_close);
-                        println!("neighbor {:?} far:         {:?}", p, lands.far);
+                        println!("neighbor {:?} field:          {:?}", p, lands.field);
+                        println!("neighbor {:?} total_exterior: {:?}", p, lands.total_exterior);
                         println!();
                     }
 
@@ -1186,23 +1026,23 @@ where Codes: codesets::Set<Item = (isize, isize)>
             // generate boundary map - maps interior boundary to farlands intersection within radius 2 of itself
             {
                 let mut boundary_map = boundary_map.borrow_mut();
+                let closed_interior = closed_interior.borrow();
                 boundary_map.clear();
                 for p in boundary.iter() {
                     let ball2: BTreeSet<_> = Adj::Open::at(*p).flat_map(|x| Adj::Closed::at(x)).collect();
                     let ball3: BTreeSet<_> = ball2.iter().flat_map(|x| Adj::Closed::at(*x)).collect();
 
+                    let field: BTreeSet<_> = ball2.iter().filter(|&x| !closed_interior.contains(x)).copied().collect();
+                    let total_exterior: BTreeSet<_> = self.exterior.iter().chain(ball3.iter()).filter(|&x| !closed_interior.contains(x) && !field.contains(x)).copied().collect();
+
                     let lands = BoundaryLands {
-                        peers: ball2.iter().filter(|&x| boundary.contains(x)).copied().collect(),
-                        inner_close: Adj::Open::at(*p).filter(|x| exterior.contains(x)).collect(),
-                        outer_close: ball3.iter().filter(|&x| exterior.contains(x)).copied().collect(),
-                        far: ball2.iter().filter(|&x| farlands.contains(x)).copied().collect(),
+                        field: field.into_iter().collect(),
+                        total_exterior: total_exterior.into_iter().collect(),
                     };
                     #[cfg(debug)]
                     {
-                        println!("boundary {:?} peers:       {:?}", p, lands.peers);
-                        println!("boundary {:?} inner_close: {:?}", p, lands.inner_close);
-                        println!("boundary {:?} outer_close: {:?}", p, lands.outer_close);
-                        println!("boundary {:?} far:         {:?}", p, lands.far);
+                        println!("boundary {:?} field:          {:?}", p, lands.field);
+                        println!("boundary {:?} total_exterior: {:?}", p, lands.total_exterior);
                         println!();
                     }
                     boundary_map.insert(*p, lands);
