@@ -3,8 +3,6 @@ use std::fmt;
 use std::io::{self, BufRead, BufReader};
 use std::fs::File;
 use std::path::Path;
-use std::rc::Rc;
-use std::cell::RefCell;
 use std::mem;
 use std::convert::TryFrom;
 use itertools::Itertools;
@@ -604,47 +602,23 @@ struct TheoProblem {
     structure: String,
 }
 
-struct TheoSearcher<'a, Codes> {
+struct TheoSearcher<'a, 'b, Codes> {
     center: (isize, isize),
-    closed_interior: Rc<RefCell<BTreeSet<(isize, isize)>>>, // everything up to radius 2
-    open_interior: Rc<RefCell<BTreeSet<(isize, isize)>>>,   // everything up to radius 2 except center
-    exterior: BTreeSet<(isize, isize)>, // everything at exactly radius 3
-    detectors: BTreeSet<(isize, isize)>,
+    closed_interior: &'a BTreeSet<(isize, isize)>, // everything up to radius 2
+    exterior: &'a BTreeSet<(isize, isize)>, // everything at exactly radius 3
+    detectors: &'a mut BTreeSet<(isize, isize)>,
 
-    neighbor_map: Rc<RefCell<BTreeMap<(isize, isize), NeighborLands>>>, // maps a neighbor of center (exactly radius 1) to outer points
-    boundary_map: Rc<RefCell<BTreeMap<(isize, isize), BoundaryLands>>>, // maps a boundary point (exactly radius 2) to outer points
+    neighbor_map: &'a BTreeMap<(isize, isize), NeighborLands>, // maps a neighbor of center (exactly radius 1) to outer points
+    boundary_map: &'a BTreeMap<(isize, isize), BoundaryLands>, // maps a boundary point (exactly radius 2) to outer points
 
-    codes: Codes,
+    codes: &'a mut Codes,
 
-    thresh: Share,
-    pipe: Option<&'a mut dyn io::Write>,
-    problems: BTreeSet<TheoProblem>,
+    thresh: &'a Share,
+    pipe: &'a mut Option<&'b mut dyn io::Write>,
+    problems: &'a mut BTreeSet<TheoProblem>,
     strategy: TheoStrategy,
 }
-impl<'a, Codes> Default for TheoSearcher<'a, Codes>
-where Codes: Default
-{
-    fn default() -> Self {
-        Self {
-            center: (0, 0),
-            closed_interior: Default::default(),
-            open_interior: Default::default(),
-            exterior: Default::default(),
-            detectors: Default::default(),
-
-            neighbor_map: Default::default(),
-            boundary_map: Default::default(),
-
-            codes: Default::default(),
-
-            thresh: Zero::zero(),
-            pipe: None,
-            problems: Default::default(),
-            strategy: TheoStrategy::NoAveraging,
-        }
-    }
-}
-impl<'a, Codes> TheoSearcher<'a, Codes>
+impl<Codes> TheoSearcher<'_, '_, Codes>
 where Codes: codesets::Set<Item = (isize, isize)>
 {
     #[must_use]
@@ -693,7 +667,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
         match ext_pos.next() {
             None => {
                 // if it's an invalid configuration, don't even bother looking at it
-                if !self.is_valid_over::<Adj, _>(self.closed_interior.clone().borrow().iter().chain(lands.field.iter()).copied()) {
+                if !self.is_valid_over::<Adj, _>(self.closed_interior.iter().chain(lands.field.iter()).copied()) {
                     return -Share::one(); // return -1 to denote nothing (no share here at all)
                 }
 
@@ -703,7 +677,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             Some(p) => {
                 self.detectors.insert(p);
                 let r1 = self.calc_max_or_over_thresh_share_boundary_recursive::<Adj, ShareAdj, _>(pos, lands, ext_pos.clone());
-                if r1 > self.thresh {
+                if &r1 > self.thresh {
                     return r1; // if > thresh max will be too - short circuit
                 }
                 self.detectors.remove(&p);
@@ -720,9 +694,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
     fn calc_max_or_over_thresh_share_boundary<Adj, ShareAdj>(&mut self, pos: (isize, isize)) -> Share
     where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
-        let boundary_map = self.boundary_map.clone();
-        let boundary_map = boundary_map.borrow();
-        let lands = boundary_map.get(&pos).unwrap();
+        let lands = self.boundary_map.get(&pos).unwrap();
 
         // go ahead and prepare the total exterior before we start searching so we don't have to do it at every terminal node
         for p in lands.total_exterior.iter() {
@@ -739,7 +711,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
         match ext_pos.next() {
             None => {
                 // if it's an invalid configuration, don't even bother looking at it
-                if !self.is_valid_over::<Adj, _>(self.closed_interior.clone().borrow().iter().chain(lands.field.iter()).copied()) {
+                if !self.is_valid_over::<Adj, _>(self.closed_interior.iter().chain(lands.field.iter()).copied()) {
                     return -Share::one(); // return -1 to denote nothing (no share here at all)
                 }
                 
@@ -749,7 +721,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             Some(p) => {
                 self.detectors.insert(p);
                 let r1 = self.calc_max_or_over_thresh_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, ext_pos.clone());
-                if r1 > self.thresh {
+                if &r1 > self.thresh {
                     return r1; // if > thresh max will be too - short circuit
                 }
                 self.detectors.remove(&p);
@@ -766,9 +738,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
     fn calc_max_or_over_thresh_share_neighbor<Adj, ShareAdj>(&mut self, neighbor: (isize, isize)) -> Share
     where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
-        let neighbor_map = self.neighbor_map.clone();
-        let neighbor_map = neighbor_map.borrow();
-        let lands = neighbor_map.get(&neighbor).unwrap();
+        let lands = self.neighbor_map.get(&neighbor).unwrap();
 
         // go ahead and prepare the total exterior before we start searching so we don't have to do it at every terminal node
         for p in lands.total_exterior.iter() {
@@ -842,7 +812,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             assert_ne!(adj_problems, 0); // this should never be zero because by hypothesis center itself is a problem
 
             // compute the total amount of safe discharge (we conservatively only allow uniform discharge into any non-problem neighbor)
-            let max_safe_discharge = (&self.thresh - share) / Share::from_integer(adj_problems.into());
+            let max_safe_discharge = (self.thresh - share) / Share::from_integer(adj_problems.into());
             assert_gt!(max_safe_discharge, Share::zero());
 
             // apply maximum safe discharging - if we drop down to or below the target thresh, we're done - yay!
@@ -866,7 +836,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
                     self.detectors.insert(*p);
                 }
                 // if not valid over the ball2 iter field, ignore (invalid configuration)
-                if !self.is_valid_over::<Adj, _>(self.closed_interior.clone().borrow().iter().copied()) {
+                if !self.is_valid_over::<Adj, _>(self.closed_interior.iter().copied()) {
                     return SearchCommand::Continue;
                 }
 
@@ -889,7 +859,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
                 // if it was over thresh, display as problem case
                 if &avg_share > &self.thresh {
                     // gather up all the info into a problem description
-                    let geo = Geometry::for_printing(&*self.closed_interior.borrow(), &self.detectors);
+                    let geo = Geometry::for_printing(self.closed_interior, &self.detectors);
                     let structure = format!("{}", geo);
                     let problem = TheoProblem {
                         center: self.center,
@@ -900,7 +870,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
                     // add to problems list (automatically sorted like we want)
                     self.problems.insert(problem);
 
-                    match self.pipe {
+                    match *self.pipe {
                         // if printing enabled, show early warning if this was the first problem (nice since we delay problem printing till end for sorted order)
                         Some(ref mut f) => {
                             if self.problems.len() == 1 {
@@ -925,174 +895,159 @@ where Codes: codesets::Set<Item = (isize, isize)>
             }
         }
     }
-    #[must_use]
-    fn calc<Adj, ShareAdj>(&mut self, strategy: TheoStrategy, thresh: Share, pipe: Option<&'a mut dyn io::Write>) -> bool
-    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
-    {
-        assert_gt!(thresh, Share::zero()); // we require thresh in (0, 1]
-        assert_le!(thresh, Share::one());
+}
+#[must_use]
+fn calc_lower_bound<Codes, Adj, ShareAdj>(strategy: TheoStrategy, thresh: Share, mut pipe: Option<&mut dyn io::Write>) -> bool
+where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterator, ShareAdj: AdjacentIterator
+{
+    assert_gt!(thresh, Share::zero()); // we require thresh in (0, 1]
+    assert_le!(thresh, Share::one());
 
-        let closed_interior = self.closed_interior.clone();
-        let open_interior = self.open_interior.clone();
-        let neighbor_map = self.neighbor_map.clone();
-        let boundary_map = self.boundary_map.clone();
+    let mut closed_interior: BTreeSet<(isize, isize)> = Default::default(); // everything up to radius 2
+    let mut open_interior: BTreeSet<(isize, isize)> = Default::default();   // everything up to radius 2 except center
+    let mut exterior: BTreeSet<(isize, isize)> = Default::default();        // everything at exactly radius 3
+    let mut detectors: BTreeSet<(isize, isize)> = Default::default();
 
-        // prepare shared search state before starting
-        self.thresh = thresh.recip(); // the thresh they tell us is density, but we do everything in terms of share, so invert it
-        self.pipe = pipe;
-        self.problems.clear();
-        self.strategy = strategy;
+    let mut neighbor_map: BTreeMap<(isize, isize), NeighborLands> = Default::default(); // maps a neighbor of center (exactly radius 1) to outer points
+    let mut boundary_map: BTreeMap<(isize, isize), BoundaryLands> = Default::default(); // maps a boundary point (exactly radius 2) to outer points
 
-        // fold recursive results from all provided center values
-        for c in Adj::CLASSES {
-            // set the center
-            self.center = *c;
+    let mut codes: Codes = Default::default();
+    let mut problems: BTreeSet<TheoProblem> = Default::default();
 
-            // generate closed interior - everything up to radius 2
-            {
-                let mut closed_interior = closed_interior.borrow_mut();
-                closed_interior.clear();
-                closed_interior.extend(Adj::Open::at(*c).flat_map(|p| Adj::Closed::at(p)));
-            }
+    let share_thresh = thresh.recip();
 
-            #[cfg(debug)]
-            println!("closed interior:\n{}", Geometry::for_printing(&*closed_interior.borrow(), &Default::default()));
+    // fold recursive results from all provided center values
+    for &center in Adj::CLASSES {
+        // generate closed interior - everything up to radius 2
+        closed_interior.clear();
+        closed_interior.extend(Adj::Open::at(center).flat_map(|p| Adj::Closed::at(p)));
 
-            // generate open interior - everything up to radius 2 except the center
-            {
-                let mut open_interior = open_interior.borrow_mut();
-                open_interior.clone_from(&*closed_interior.borrow());
-                open_interior.remove(c);
-            }
+        #[cfg(debug)]
+        println!("closed interior:\n{}", Geometry::for_printing(&closed_interior, &Default::default()));
 
-            #[cfg(debug)]
-            println!("open interior:\n{}", Geometry::for_printing(&*open_interior.borrow(), &Default::default()));
+        // generate open interior - everything up to radius 2 except the center
+        open_interior.clone_from(&closed_interior);
+        open_interior.remove(&center);
 
-            // generate exterior - everything at exactly radius 3
-            {
-                let closed_interior = closed_interior.borrow();
-                self.exterior.clear();
-                self.exterior.extend(closed_interior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p)));
-            }
+        #[cfg(debug)]
+        println!("open interior:\n{}", Geometry::for_printing(&open_interior, &Default::default()));
 
-            #[cfg(debug)]
-            println!("exterior:\n{}", Geometry::for_printing(&*exterior.borrow(), &Default::default()));
+        // generate exterior - everything at exactly radius 3
+        exterior.clear();
+        exterior.extend(closed_interior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p)));
 
-            // generate boundary - everything at exactly radius 2
-            let boundary: BTreeSet<_> = {
-                let closed_interior = closed_interior.borrow();
-                self.exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| closed_interior.contains(p)).collect()
+        #[cfg(debug)]
+        println!("exterior:\n{}", Geometry::for_printing(&exterior, &Default::default()));
+
+        // generate boundary - everything at exactly radius 2
+        let boundary: BTreeSet<_> = exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| closed_interior.contains(p)).collect();
+
+        #[cfg(debug)]
+        println!("boundary:\n{}", Geometry::for_printing(&boundary, &Default::default()));
+
+        // generate neighbor map - maps neighbor of center to outer points
+        neighbor_map.clear();
+        for p in Adj::Open::at(center) {
+            let ball2: BTreeSet<_> = Adj::Open::at(p).flat_map(|x| Adj::Closed::at(x)).collect();
+            let ball3: BTreeSet<_> = ball2.iter().flat_map(|x| Adj::Closed::at(*x)).collect();
+
+            let field: BTreeSet<_> = ball2.iter().filter(|&x| !closed_interior.contains(x)).copied().collect();
+            let total_exterior: BTreeSet<_> = exterior.iter().chain(ball3.iter()).filter(|&x| !closed_interior.contains(x) && !field.contains(x)).copied().collect();
+
+            let lands = NeighborLands {
+                field: field.into_iter().collect(),
+                total_exterior: total_exterior.into_iter().collect(),
             };
-
             #[cfg(debug)]
-            println!("boundary:\n{}", Geometry::for_printing(&boundary, &Default::default()));
-
-            // generate farlands - everything at exactly radius 4
-            let farlands: BTreeSet<_> = {
-                let closed_interior = closed_interior.borrow();
-                self.exterior.iter().flat_map(|p| Adj::Open::at(*p)).filter(|p| !closed_interior.contains(p) && !self.exterior.contains(p)).collect()
-            };
-
-            #[cfg(debug)]
-            println!("farlands:\n{}", Geometry::for_printing(&farlands, &Default::default()));
-
-            // generate neighbor map - maps neighbor of center to outer points
             {
-                let mut neighbor_map = neighbor_map.borrow_mut();
-                let closed_interior = closed_interior.borrow();
-                neighbor_map.clear();
-                for p in Adj::Open::at(*c) {
-                    let ball2: BTreeSet<_> = Adj::Open::at(p).flat_map(|x| Adj::Closed::at(x)).collect();
-                    let ball3: BTreeSet<_> = ball2.iter().flat_map(|x| Adj::Closed::at(*x)).collect();
-
-                    let field: BTreeSet<_> = ball2.iter().filter(|&x| !closed_interior.contains(x)).copied().collect();
-                    let total_exterior: BTreeSet<_> = self.exterior.iter().chain(ball3.iter()).filter(|&x| !closed_interior.contains(x) && !field.contains(x)).copied().collect();
-
-                    let lands = NeighborLands {
-                        field: field.into_iter().collect(),
-                        total_exterior: total_exterior.into_iter().collect(),
-                    };
-                    #[cfg(debug)]
-                    {
-                        println!("neighbor {:?} field:          {:?}", p, lands.field);
-                        println!("neighbor {:?} total_exterior: {:?}", p, lands.total_exterior);
-                        println!();
-                    }
-
-                    neighbor_map.insert(p, lands);
-                }
+                println!("neighbor {:?} field:          {:?}", p, lands.field);
+                println!("neighbor {:?} total_exterior: {:?}", p, lands.total_exterior);
+                println!();
             }
 
-            // generate boundary map - maps interior boundary to farlands intersection within radius 2 of itself
-            {
-                let mut boundary_map = boundary_map.borrow_mut();
-                let closed_interior = closed_interior.borrow();
-                boundary_map.clear();
-                for p in boundary.iter() {
-                    let ball2: BTreeSet<_> = Adj::Open::at(*p).flat_map(|x| Adj::Closed::at(x)).collect();
-                    let ball3: BTreeSet<_> = ball2.iter().flat_map(|x| Adj::Closed::at(*x)).collect();
-
-                    let field: BTreeSet<_> = ball2.iter().filter(|&x| !closed_interior.contains(x)).copied().collect();
-                    let total_exterior: BTreeSet<_> = self.exterior.iter().chain(ball3.iter()).filter(|&x| !closed_interior.contains(x) && !field.contains(x)).copied().collect();
-
-                    let lands = BoundaryLands {
-                        field: field.into_iter().collect(),
-                        total_exterior: total_exterior.into_iter().collect(),
-                    };
-                    #[cfg(debug)]
-                    {
-                        println!("boundary {:?} field:          {:?}", p, lands.field);
-                        println!("boundary {:?} total_exterior: {:?}", p, lands.total_exterior);
-                        println!();
-                    }
-                    boundary_map.insert(*p, lands);
-                }
-            }
-
-            // each pass starts with no detectors except the center
-            self.detectors.clear();
-            self.detectors.insert(*c);
-
-            // perform center folding
-            if self.calc_recursive::<Adj, ShareAdj, _>(open_interior.borrow().iter().copied()) == SearchCommand::Halt {
-                break;
-            }
+            neighbor_map.insert(p, lands);
         }
 
-        match self.pipe {
-            Some(ref mut f) => {
-                // if there were no problems then we've proven thresh works
-                if self.problems.is_empty() {
-                    // attempt to convert to a floating-point representation
-                    let float = match thresh.numer().to_string().parse::<f64>() {
-                        Ok(n) => match thresh.denom().to_string().parse::<f64>() {
-                            Ok(d) => (n / d).to_string(),
-                            Err(_) => "f64 overflow".to_string(),
-                        },
+        // generate boundary map - maps interior boundary to farlands intersection within radius 2 of itself
+        boundary_map.clear();
+        for p in boundary.iter() {
+            let ball2: BTreeSet<_> = Adj::Open::at(*p).flat_map(|x| Adj::Closed::at(x)).collect();
+            let ball3: BTreeSet<_> = ball2.iter().flat_map(|x| Adj::Closed::at(*x)).collect();
+
+            let field: BTreeSet<_> = ball2.iter().filter(|&x| !closed_interior.contains(x)).copied().collect();
+            let total_exterior: BTreeSet<_> = exterior.iter().chain(ball3.iter()).filter(|&x| !closed_interior.contains(x) && !field.contains(x)).copied().collect();
+
+            let lands = BoundaryLands {
+                field: field.into_iter().collect(),
+                total_exterior: total_exterior.into_iter().collect(),
+            };
+            #[cfg(debug)]
+            {
+                println!("boundary {:?} field:          {:?}", p, lands.field);
+                println!("boundary {:?} total_exterior: {:?}", p, lands.total_exterior);
+                println!();
+            }
+            boundary_map.insert(*p, lands);
+        }
+
+        // each pass starts with no detectors except the center
+        detectors.clear();
+        detectors.insert(center);
+
+        // generate recursive search object (encodes the borrow contracts for borrowchecker)
+        let mut searcher = TheoSearcher {
+            center,
+            closed_interior: &closed_interior,
+            exterior: &exterior,
+            detectors: &mut detectors,
+
+            neighbor_map: &neighbor_map,
+            boundary_map: &boundary_map,
+
+            codes: &mut codes,
+
+            thresh: &share_thresh,
+            pipe: &mut pipe,
+            problems: &mut problems,
+            strategy,
+        };
+
+        // perform center folding
+        if searcher.calc_recursive::<Adj, ShareAdj, _>(open_interior.iter().copied()) == SearchCommand::Halt {
+            break;
+        }
+    }
+
+    match pipe {
+        Some(f) => {
+            // if there were no problems then we've proven thresh works
+            if problems.is_empty() {
+                // attempt to convert to a floating-point representation
+                let float = match thresh.numer().to_string().parse::<f64>() {
+                    Ok(n) => match thresh.denom().to_string().parse::<f64>() {
+                        Ok(d) => (n / d).to_string(),
                         Err(_) => "f64 overflow".to_string(),
-                    };
+                    },
+                    Err(_) => "f64 overflow".to_string(),
+                };
 
-                    // print results and return what we found
-                    writeln!(f, "found theo lower bound {} ({})", thresh, float).unwrap();
+                // print results and return what we found
+                writeln!(f, "found theo lower bound {} ({})", thresh, float).unwrap();
+            }
+            // otherwise there were problems - conservatively, all we can say is that it didn't work
+            else {
+                // print out all the problems we encountered (already in desired print order)
+                for p in problems.iter() {
+                    writeln!(f, "problem: {} ({}) (center {:?})\n{}", p.share, p.avg_share, p.center, p.structure).unwrap();
                 }
-                // otherwise there were problems - conservatively, all we can say is that it didn't work
-                else {
-                    // print out all the problems we encountered (already in desired print order)
-                    for p in self.problems.iter() {
-                        writeln!(f, "problem: {} ({}) (center {:?})\n{}", p.share, p.avg_share, p.center, p.structure).unwrap();
-                    }
-                    writeln!(f, "total problems: {}", self.problems.len()).unwrap();
-                }
-            },
-            None => (),
-        }
+                writeln!(f, "total problems: {}", problems.len()).unwrap();
+            }
+        },
+        None => (),
+    }
 
-        // return true if we succeeded, otherwise false
-        self.problems.is_empty()
-    }
-    fn new() -> Self {
-        Default::default()
-    }
+    // return true if we succeeded, otherwise false
+    problems.is_empty()
 }
 
 #[derive(Debug)]
@@ -1438,7 +1393,7 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy, mut
 
     macro_rules! calc {
         ($set:ident, $adj:ident, $shadj:ident) => {
-            TheoSearcher::<codesets::$set<(isize, isize)>>::new().calc::<adj::$adj, adj::$shadj>(strategy, thresh, pipe)
+            calc_lower_bound::<codesets::$set<(isize, isize)>, adj::$adj, adj::$shadj>(strategy, thresh, pipe)
         }
     }
     macro_rules! family {
