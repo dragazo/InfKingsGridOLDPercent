@@ -5,6 +5,10 @@ use std::fs::File;
 use std::path::Path;
 use std::mem;
 use std::convert::TryFrom;
+use std::str::FromStr;
+use std::thread;
+use std::sync::{Mutex, Arc};
+
 use itertools::Itertools;
 use num::{BigRational, BigInt};
 use num::traits::{Zero, One};
@@ -1301,7 +1305,60 @@ fn parse_thresh_frac(v: &str) -> Share {
     }
 }
 
-fn tess_helper_calc<T: Tessellation>(tess: &mut T, set: &str, graph: &str, goal: &str) -> Option<usize> {
+#[derive(Debug, Clone, Copy)]
+enum Parameter {
+    DOM, ODOM,
+    EDOM, EODOM,
+    LD, REDLD, DETLD, ERRLD,
+    IC, REDIC, DETIC, ERRIC,
+    OLD, REDOLD, DETOLD, ERROLD,
+}
+impl FromStr for Parameter {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "dom" => Parameter::DOM,
+            "odom" => Parameter::ODOM,
+            "edom" => Parameter::EDOM,
+            "eodom" => Parameter::EODOM,
+            "ld" => Parameter::LD,
+            "red:ld" | "redld" => Parameter::REDLD,
+            "det:ld" | "detld" => Parameter::DETLD,
+            "err:ld" | "errld" => Parameter::ERRLD,
+            "ic" => Parameter::IC,
+            "red:ic" | "redic" => Parameter::REDIC,
+            "det:ic" | "detic" => Parameter::DETIC,
+            "err:ic" | "erric" => Parameter::ERRIC,
+            "old" => Parameter::OLD,
+            "red:old" | "redold" => Parameter::REDOLD,
+            "det:old" | "detold" => Parameter::DETOLD,
+            "err:old" | "errold" => Parameter::ERROLD,
+
+            _ => return Err(()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Graph {
+    K, TRI, SQ, HEX, TMB,
+}
+impl FromStr for Graph {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "k" | "king" | "kings" => Graph::K,
+            "tri" => Graph::TRI,
+            "sq" | "square" | "grid" => Graph::SQ,
+            "hex" => Graph::HEX,
+            "tmb" => Graph::TMB,
+
+            _ => return Err(()),
+        })
+    }
+}
+
+fn tess_helper_calc<T: Tessellation>(tess: &mut T, param: Parameter, graph: Graph, goal: &str) -> Option<usize> {
     macro_rules! calc_thresh {
         ($set:ident, $adj:ident) => {
             tess.try_satisfy::<codesets::$set<(isize, isize)>, adj::$adj>(Goal::MeetOrBeat(parse_thresh(goal)))
@@ -1314,37 +1371,33 @@ fn tess_helper_calc<T: Tessellation>(tess: &mut T, set: &str, graph: &str, goal:
     }
     macro_rules! family {
         ($open:ident, $closed:ident) => {
-            match set {
-                "dom" => calc_thresh!(DOM, $closed),
-                "odom" => calc_thresh!(DOM, $open),
-                "edom" => calc_exactly!(EDOM, $closed),
-                "eodom" => calc_exactly!(EDOM, $open),
-                "ld" => calc_thresh!(LD, $open),
-                "red:ld" => calc_thresh!(REDLD, $open),
-                "det:ld" => calc_thresh!(DETLD, $open),
-                "err:ld" => calc_thresh!(ERRLD, $open),
-                "ic" => calc_thresh!(OLD, $closed),
-                "red:ic" => calc_thresh!(RED, $closed),
-                "det:ic" => calc_thresh!(DET, $closed),
-                "err:ic" => calc_thresh!(ERR, $closed),
-                "old" => calc_thresh!(OLD, $open),
-                "red:old" => calc_thresh!(RED, $open),
-                "det:old" => calc_thresh!(DET, $open),
-                "err:old" => calc_thresh!(ERR, $open),
-
-                _ => crash!(2, "unknown set: {}", set),
+            match param {
+                Parameter::DOM => calc_thresh!(DOM, $closed),
+                Parameter::ODOM => calc_thresh!(DOM, $open),
+                Parameter::EDOM => calc_exactly!(EDOM, $closed),
+                Parameter::EODOM => calc_exactly!(EDOM, $open),
+                Parameter::LD => calc_thresh!(LD, $open),
+                Parameter::REDLD => calc_thresh!(REDLD, $open),
+                Parameter::DETLD => calc_thresh!(DETLD, $open),
+                Parameter::ERRLD => calc_thresh!(ERRLD, $open),
+                Parameter::IC => calc_thresh!(OLD, $closed),
+                Parameter::REDIC => calc_thresh!(RED, $closed),
+                Parameter::DETIC => calc_thresh!(DET, $closed),
+                Parameter::ERRIC => calc_thresh!(ERR, $closed),
+                Parameter::OLD => calc_thresh!(OLD, $open),
+                Parameter::REDOLD => calc_thresh!(RED, $open),
+                Parameter::DETOLD => calc_thresh!(DET, $open),
+                Parameter::ERROLD => calc_thresh!(ERR, $open),
             }
         }
     }
 
     match graph {
-        "king" => family!(OpenKing, ClosedKing),
-        "tri" => family!(OpenTri, ClosedTri),
-        "grid" => family!(OpenGrid, ClosedGrid),
-        "hex" => family!(OpenHex, ClosedHex),
-        "tmb" => family!(OpenTMB, ClosedTMB),
-
-        _ => crash!(2, "unknown graph: {}", graph),
+        Graph::K => family!(OpenKing, ClosedKing),
+        Graph::TRI => family!(OpenTri, ClosedTri),
+        Graph::SQ => family!(OpenGrid, ClosedGrid),
+        Graph::HEX => family!(OpenHex, ClosedHex),
+        Graph::TMB => family!(OpenTMB, ClosedTMB),
     }
 }
 fn tess_helper_print<T: Tessellation>(tess: &T, min: usize) {
@@ -1352,42 +1405,93 @@ fn tess_helper_print<T: Tessellation>(tess: &T, min: usize) {
     let d = util::gcd(min, n);
     println!("found a {}/{} ({}) solution:\n{}", (min / d), (n / d), (min as f64 / n as f64), tess);
 }
-fn tess_helper<T: Tessellation>(mut tess: T, set: &str, graph: &str, goal: &str) {
-    match tess_helper_calc(&mut tess, set, graph, goal) {
+fn tess_helper<T: Tessellation>(mut tess: T, param: &str, graph: &str, goal: &str) {
+    let param: Parameter = param.parse().unwrap_or_else(|_| crash!(2, "unknown parameter: {}", param));
+    let graph: Graph = graph.parse().unwrap_or_else(|_| crash!(2, "unknown graph: {}", graph));
+    
+    match tess_helper_calc(&mut tess, param, graph, goal) {
         Some(min) => tess_helper_print(&tess, min),
         None => println!("no solution found"),
     }
 }
-fn entropy_helper(big_geo: Geometry, entropy_size: &str, set: &str, graph: &str, goal: &str) {
+fn entropy_helper(big_geo: Geometry, entropy_size: &str, param: &str, graph: &str, goal: &str, threadc: &str) {
+    let param: Parameter = param.parse().unwrap_or_else(|_| crash!(2, "unknown parameter: {}", param));
+    let graph: Graph = graph.parse().unwrap_or_else(|_| crash!(2, "unknown graph: {}", graph));
+
     let entropy_size = match entropy_size.parse::<usize>() {
         Ok(v) if v <= big_geo.size() => v,
         Ok(v) => crash!(2, "entropy size cannot exceed size of geometry (geo size {}, entropy size {})", big_geo.size(), v),
         Err(_) => crash!(2, "failed to parse '{}' as positive integer", entropy_size),
     };
-    let mut done_geos: BTreeSet<_> = Default::default(); // set of geometies we've already tried
+    let cpus = num_cpus::get();
+    let threadc = match threadc.parse::<usize>() {
+        Ok(x) if x == 0 => crash!(2, "cannot use 0 threads"),
+        Ok(x) if x > cpus => crash!(2, "this system has only {} cores, but {} were requested", cpus, x),
+        Ok(x) => x,
+        Err(_) => crash!(2, "failed to parse '{}' as positive integer", threadc),
+    };
 
-    'next_geo: for geo in big_geo.sub_geometries(entropy_size) {
-        if !done_geos.insert(geo.to_string()) {
-            continue 'next_geo; // if we've already done this geometry, skip to next
-        }
-        let mut tess = match GeometryTessellation::try_from(geo) {
-            Ok(t) => t,
-            Err(_) => continue 'next_geo, // on tessellation failure, just move on to next geometry
-        };
-        match tess_helper_calc(&mut tess, set, graph, goal) {
-            Some(min) => {
-                tess_helper_print(&tess, min); // on successful search, print result and terminate
-                return;
+    let geos = big_geo.sub_geometries(entropy_size);
+    let done_geos: BTreeSet<_> = Default::default();
+    let data = Arc::new(Mutex::new((geos, done_geos, false))); // shared sync state for search
+    let goal = Arc::new(goal.to_owned()); // we need to own goal to share, using Arc to avoid multiple copies
+
+    let mut threads: Vec<_> = Vec::with_capacity(threadc);
+    for _ in 0..threadc {
+        let data = data.clone();
+        let goal = goal.clone();
+        threads.push(thread::spawn(move || {
+            loop {
+                let geo = {
+                    let mut data = data.lock().unwrap();
+                    if data.2 {
+                        break // if the solution flag was set, abort
+                    }
+                    match data.0.next() {
+                        Some(geo) => {
+                            if !data.1.insert(geo.to_string()) {
+                                continue // if we've already seen a similar shape, skip it
+                            }
+                            geo
+                        },
+                        None => break, // if there are no more geometries we're done
+                    }
+                };
+
+                // generate the tessellation structure
+                let mut tess = match GeometryTessellation::try_from(geo) {
+                    Ok(t) => t,
+                    Err(_) => continue, // on tessellation failure, just move on to next geometry
+                };
+
+                // on successful search, print result and terminate
+                if let Some(min) = tess_helper_calc(&mut tess, param, graph, &goal) {
+                    let mut data = data.lock().unwrap();
+
+                    // if solution flag has not been set, print solution and set it
+                    if !data.2 {
+                        tess_helper_print(&tess, min);
+                        data.2 = true;
+                    }
+                    break;
+                }
             }
-            None => (), // otherwise do nothing
-        }
+        }));
     }
-    println!("no solution found"); // if we get to this point then we've exhausted all our entropy and found no solutions
+    for thread in threads {
+        thread.join().unwrap();
+    }
+
+    // if we get to this point then we've exhausted all geometries and found no solutions
+    println!("no solution found");
 }
-fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy, mut pipe: Option<&mut dyn io::Write>) -> bool {
+fn theo_helper(param: &str, graph: &str, thresh: &str, strategy: TheoStrategy, mut pipe: Option<&mut dyn io::Write>) -> bool {
+    let param: Parameter = param.parse().unwrap_or_else(|_| crash!(2, "unknown parameter: {}", param));
+    let graph: Graph = graph.parse().unwrap_or_else(|_| crash!(2, "unknown graph: {}", graph));
+
     let thresh = parse_thresh_frac(thresh);
     match pipe {
-        Some(ref mut f) => writeln!(f, "lower bound for {} set on {} graph - {:?} thresh {}", set, graph, strategy, thresh).unwrap(),
+        Some(ref mut f) => writeln!(f, "lower bound for {:?} set on {:?} graph - {:?} thresh {}", param, graph, strategy, thresh).unwrap(),
         None => (),
     }
 
@@ -1398,35 +1502,32 @@ fn theo_helper(set: &str, graph: &str, thresh: &str, strategy: TheoStrategy, mut
     }
     macro_rules! family {
         ($open:ident, $closed:ident) => {
-            match set {
-                "dom" => calc!(DOM, $closed, $closed),
-                "odom" => calc!(DOM, $open, $open),
-                "ld" => calc!(LD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
-                "red:ld" => calc!(REDLD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
-                "det:ld" => calc!(DETLD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
-                "err:ld" => calc!(ERRLD, $open, $closed), // important: this one uses open adj for loc codes and closed adj for share
-                "ic" => calc!(OLD, $closed, $closed),
-                "red:ic" => calc!(RED, $closed, $closed),
-                "det:ic" => calc!(DET, $closed, $closed),
-                "err:ic" => calc!(ERR, $closed, $closed),
-                "old" => calc!(OLD, $open, $open),
-                "red:old" => calc!(RED, $open, $open),
-                "det:old" => calc!(DET, $open, $open),
-                "err:old" => calc!(ERR, $open, $open),
-                
-                _ => crash!(2, "unknown set: {}", set),
+            match param {
+                Parameter::DOM => calc!(DOM, $closed, $closed),
+                Parameter::ODOM => calc!(DOM, $open, $open),
+                Parameter::EDOM | Parameter::EODOM => crash!(2, "lower bound does not currently support {:?}", param), 
+                Parameter::LD => calc!(LD, $open, $closed),       // important: this one uses open adj for loc codes but closed adj for share
+                Parameter::REDLD => calc!(REDLD, $open, $closed), // important: this one uses open adj for loc codes but closed adj for share
+                Parameter::DETLD => calc!(DETLD, $open, $closed), // important: this one uses open adj for loc codes but closed adj for share
+                Parameter::ERRLD => calc!(ERRLD, $open, $closed), // important: this one uses open adj for loc codes but closed adj for share
+                Parameter::IC => calc!(OLD, $closed, $closed),
+                Parameter::REDIC => calc!(RED, $closed, $closed),
+                Parameter::DETIC => calc!(DET, $closed, $closed),
+                Parameter::ERRIC => calc!(ERR, $closed, $closed),
+                Parameter::OLD => calc!(OLD, $open, $open),
+                Parameter::REDOLD => calc!(RED, $open, $open),
+                Parameter::DETOLD => calc!(DET, $open, $open),
+                Parameter::ERROLD => calc!(ERR, $open, $open),
             }
         }
     }
 
     match graph {
-        "king" => family!(OpenKing, ClosedKing),
-        "tri" => family!(OpenTri, ClosedTri),
-        "grid" => family!(OpenGrid, ClosedGrid),
-        "hex" => family!(OpenHex, ClosedHex),
-        "tmb" => family!(OpenTMB, ClosedTMB),
-
-        _ => crash!(2, "unknown graph: {}", graph),
+        Graph::K => family!(OpenKing, ClosedKing),
+        Graph::TRI => family!(OpenTri, ClosedTri),
+        Graph::SQ => family!(OpenGrid, ClosedGrid),
+        Graph::HEX => family!(OpenHex, ClosedHex),
+        Graph::TMB => family!(OpenTMB, ClosedTMB),
     }
 }
 fn auto_theo_helper(set: &str, graph: &str, strategy: TheoStrategy) {
@@ -1602,22 +1703,22 @@ fn main() {
             tess_helper(tess, &args[3], &args[4], &args[5])
         }
         Some("entropy-rect") => {
-            if args.len() != 8 {
-                crash!(1, "usage: {} entropy-rect [rows] [cols] [entropy-size] [set-type] [graph] [thresh]", args[0]);
+            if args.len() != 9 {
+                crash!(1, "usage: {} entropy-rect [rows] [cols] [entropy-size] [set-type] [graph] [thresh] [threads]", args[0]);
             }
             let rows: usize = parse_dim(&args[2]);
             let cols: usize = parse_dim(&args[3]);
             let big_geo = Geometry::rectangle(rows, cols);
-            entropy_helper(big_geo, &args[4], &args[5], &args[6], &args[7]);
+            entropy_helper(big_geo, &args[4], &args[5], &args[6], &args[7], &args[8]);
         }
         Some("entropy-geo") => {
-            if args.len() != 7 {
-                crash!(1, "usage: {} entropy-geo [geometry-file] [entropy-size] [set-type] [graph] [thresh]", args[0]);
+            if args.len() != 8 {
+                crash!(1, "usage: {} entropy-geo [geometry-file] [entropy-size] [set-type] [graph] [thresh] [threads]", args[0]);
             }
             let big_geo = get_geometry(&args[2]);
-            entropy_helper(big_geo, &args[3], &args[4], &args[5], &args[6]);
+            entropy_helper(big_geo, &args[3], &args[4], &args[5], &args[6], &args[7]);
         }
-        _ => crash!(1, "usage: {} [finite|rect|geo|theo|theo-avg]", args[0]),
+        _ => crash!(1, "usage: {} [finite|rect|geo|entropy-rect|entropy-geo|theo|theo-avg|theo-dis|auto-theo|auto-theo-avg|auto-theo-dis]", args[0]),
     };
 }
 
