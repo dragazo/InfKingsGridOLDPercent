@@ -18,7 +18,12 @@ pub trait AdjacentIterator: Iterator<Item = (isize, isize)> + Clone {
     type Open: OpenIterator;
     type Closed: ClosedIterator;
 
-    fn new(row: isize, col: isize) -> Self;
+    fn class(row: isize, col: isize) -> usize;
+    fn with_class(row: isize, col: isize, class: usize) -> Self;
+
+    fn new(row: isize, col: isize) -> Self {
+        Self::with_class(row, col, Self::class(row, col))
+    }
     fn at(pos: (isize, isize)) -> Self {
         Self::new(pos.0, pos.1)
     }
@@ -40,7 +45,10 @@ impl AdjacentIterator for ClosedKing {
     type Open = OpenKing;
     type Closed = Self;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(_: isize, _: isize) -> usize {
+        0
+    }
+    fn with_class(row: isize, col: isize, _: usize) -> Self {
         Self { row, col, state: 0 }
     }
 
@@ -82,7 +90,10 @@ impl AdjacentIterator for OpenKing {
     type Open = Self;
     type Closed = ClosedKing;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(_: isize, _: isize) -> usize {
+        0
+    }
+    fn with_class(row: isize, col: isize, _: usize) -> Self {
         Self { row, col, state: 0 }
     }
 
@@ -123,7 +134,10 @@ impl AdjacentIterator for ClosedGrid {
     type Open = OpenGrid;
     type Closed = Self;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(_: isize, _: isize) -> usize {
+        0
+    }
+    fn with_class(row: isize, col: isize, _: usize) -> Self {
         Self { row, col, state: 0 }
     }
 
@@ -164,7 +178,10 @@ impl AdjacentIterator for OpenGrid {
     type Open = Self;
     type Closed = ClosedGrid;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(_: isize, _: isize) -> usize {
+        0
+    }
+    fn with_class(row: isize, col: isize, _: usize) -> Self {
         Self { row, col, state: 0 }
     }
 
@@ -204,7 +221,10 @@ impl AdjacentIterator for ClosedTri {
     type Open = OpenTri;
     type Closed = Self;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(_: isize, _: isize) -> usize {
+        0
+    }
+    fn with_class(row: isize, col: isize, _: usize) -> Self {
         Self { row, col, state: 0 }
     }
 
@@ -247,7 +267,10 @@ impl AdjacentIterator for OpenTri {
     type Open = Self;
     type Closed = ClosedTri;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(_: isize, _: isize) -> usize {
+        0
+    }
+    fn with_class(row: isize, col: isize, _: usize) -> Self {
         Self { row, col, state: 0 }
     }
 
@@ -289,14 +312,17 @@ impl AdjacentIterator for ClosedHex {
     type Open = OpenHex;
     type Closed = Self;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(row: isize, col: isize) -> usize {
+        if (row + col) % 2 == 0 { 0 } else { 1 }
+    }
+    fn with_class(row: isize, col: isize, class: usize) -> Self {
         Self {
             row, col,
-            state: if (row + col) % 2 == 0 { 0 } else { 5 },
+            state: [0, 5][class],
         }
     }
 
-    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0), (0, 1)];
 }
 impl Iterator for ClosedHex {
     type Item = (isize, isize);
@@ -336,14 +362,17 @@ impl AdjacentIterator for OpenHex {
     type Open = Self;
     type Closed = ClosedHex;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(row: isize, col: isize) -> usize {
+        if (row + col) % 2 == 0 { 0 } else { 1 }
+    }
+    fn with_class(row: isize, col: isize, class: usize) -> Self {
         Self {
             row, col,
-            state: if (row + col) % 2 == 0 { 0 } else { 4 },
+            state: [0, 4][class], 
         }
     }
 
-    const CLASSES: &'static [(isize, isize)] = &[(0, 0)];
+    const CLASSES: &'static [(isize, isize)] = &[(0, 0), (0, 1)];
 }
 impl Iterator for OpenHex {
     type Item = (isize, isize);
@@ -382,10 +411,13 @@ impl AdjacentIterator for ClosedTMB {
     type Open = OpenTMB;
     type Closed = Self;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(row: isize, col: isize) -> usize {
+        util::modulus(row + col, 3)
+    }
+    fn with_class(row: isize, col: isize, class: usize) -> Self {
         Self {
             row, col,
-            state: [0, 8, 13][util::modulus(row + col, 3)],
+            state: [0, 8, 13][class],
         }
     }
 
@@ -433,10 +465,13 @@ impl AdjacentIterator for OpenTMB {
     type Open = Self;
     type Closed = ClosedTMB;
 
-    fn new(row: isize, col: isize) -> Self {
+    fn class(row: isize, col: isize) -> usize {
+        util::modulus(row + col, 3)
+    }
+    fn with_class(row: isize, col: isize, class: usize) -> Self {
         Self {
             row, col,
-            state: [0, 7, 11][util::modulus(row + col, 3)],
+            state: [0, 7, 11][class],
         }
     }
 

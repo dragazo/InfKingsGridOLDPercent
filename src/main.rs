@@ -51,199 +51,10 @@ trait Solver {
     fn try_satisfy<Adj>(&mut self, goal: Goal) -> Option<usize> where Adj: adj::AdjacentIterator;
 }
 
-struct RectSolverBase<'a, Codes> {
-    src: &'a mut RectTessellation,
-    codes: Codes,
-    interior_codes: Codes,
-    needed: usize,
-    prevs: Vec<(isize, isize)>,
-}
-struct RectSolver<'a, Codes> {
-    base: RectSolverBase<'a, Codes>,
-    phases: Vec<(isize, isize)>,
-}
-impl<Codes> RectSolverBase<'_, Codes>
-where Codes: codesets::Set<Item = (isize, isize)>
-{
-    fn id_to_inside(&self, row: isize, col: isize) -> usize {
-        let col_fix = if row < 0 { col - self.src.phase.0 } else if row >= self.src.rows as isize { col + self.src.phase.0 } else { col };
-        let row_fix = if col < 0 { row - self.src.phase.1 } else if col >= self.src.cols as isize { row + self.src.phase.1 } else { row };
-
-        let r = (row_fix + 2 * self.src.rows as isize) as usize % self.src.rows;
-        let c = (col_fix + 2 * self.src.cols as isize) as usize % self.src.cols;
-        r * self.src.cols + c
-    }
-    fn get_locating_code<Adj>(&self, pos: (isize, isize)) -> Codes::LocatingCode
-    where Adj: adj::AdjacentIterator
-    {
-        let mut v = Vec::with_capacity(9);
-        for x in Adj::at(pos) {
-            if self.src.old_set[self.id_to_inside(x.0, x.1)] {
-                v.push(x)
-            }
-        }
-        let is_detector = self.src.old_set[self.id_to_inside(pos.0, pos.1)];
-        Codes::LocatingCode::new(pos, is_detector, v)
-    }
-    fn is_old_interior_up_to<Adj>(&mut self, row: isize) -> bool
-    where Adj: adj::AdjacentIterator
-    {
-        self.interior_codes.clear();
-        for r in 1..row - 1 {
-            for c in 1..self.src.cols as isize - 1 {
-                let loc = self.get_locating_code::<Adj>((r, c));
-                if !self.interior_codes.add(loc) {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-    fn is_old_with_current_phase<Adj>(&mut self) -> bool
-    where Adj: adj::AdjacentIterator
-    {
-        self.codes.clear();
-        for &r in &[-1, 0, self.src.rows as isize - 1, self.src.rows as isize] {
-            for c in -1 ..= self.src.cols as isize {
-                let loc = self.get_locating_code::<Adj>((r, c));
-                if !self.interior_codes.can_add(&loc) || !self.codes.add(loc) {
-                    return false;
-                }
-            }
-        }
-        for r in 1 ..= self.src.rows as isize - 2 {
-            for &c in &[-1, 0, self.src.cols as isize - 1, self.src.cols as isize] {
-                let loc = self.get_locating_code::<Adj>((r, c));
-                if !self.interior_codes.can_add(&loc) || !self.codes.add(loc) {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-}
-impl<Codes> RectSolver<'_, Codes>
-where Codes: codesets::Set<Item = (isize, isize)>
-{
-    fn calc_old_min_interior<Adj>(&mut self, pos: usize) -> bool
-    where Adj: adj::AdjacentIterator
-    {
-        if self.base.needed == self.base.prevs.len() {
-            if self.is_old::<Adj>() {
-                return true;
-            }
-        } else if pos + (self.base.needed - self.base.prevs.len()) <= self.base.src.old_set.len() { //pos < self.base.src.old_set.len() {
-            let p = ((pos / self.base.src.cols) as isize, (pos % self.base.src.cols) as isize);
-
-            let good_so_far = p.1 != 0 || self.base.is_old_interior_up_to::<Adj>(p.0);
-
-            if good_so_far {
-                self.base.src.old_set[pos] = true;
-                self.base.prevs.push(p);
-                if self.calc_old_min_interior::<Adj>(pos + 1) {
-                    return true;
-                }
-                self.base.prevs.pop();
-                self.base.src.old_set[pos] = false;
-
-                return self.calc_old_min_interior::<Adj>(pos + 1);
-            }
-        }
-
-        false
-    }
-}
-impl<Codes> Solver for RectSolver<'_, Codes>
-where Codes: codesets::Set<Item = (isize, isize)>
-{
-    fn is_old<Adj>(&mut self) -> bool
-    where Adj: adj::AdjacentIterator
-    {
-        if self.base.is_old_interior_up_to::<Adj>(self.base.src.rows as isize) {
-            for phase in &self.phases {
-                self.base.src.phase = *phase;
-                if self.base.is_old_with_current_phase::<Adj>() {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-    fn try_satisfy<Adj>(&mut self, goal: Goal) -> Option<usize>
-    where Adj: adj::AdjacentIterator
-    {
-        for x in &mut self.base.src.old_set { *x = false; }
-        self.base.prevs.clear();
-        self.base.needed = goal.get_value(self.base.src.old_set.len());
-
-        if self.calc_old_min_interior::<Adj>(0) { Some(self.base.needed) } else { None }
-    }
-}
-
 trait Tessellation: fmt::Display {
     fn size(&self) -> usize;
     fn try_satisfy<Codes, Adj>(&mut self, goal: Goal) -> Option<usize>
     where Codes: codesets::Set<Item = (isize, isize)>, Adj: adj::AdjacentIterator;
-}
-
-struct RectTessellation {
-    rows: usize,
-    cols: usize,
-    old_set: Vec<bool>,
-    phase: (isize, isize),
-}
-impl fmt::Display for RectTessellation {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for r in 0..self.rows {
-            for c in 0..self.cols {
-                write!(f, "{} ", if self.old_set[r * self.cols + c] { 1 } else { 0 })?;
-            }
-            writeln!(f)?;
-        }
-        writeln!(f, "phase: {:?}", self.phase)?;
-        Ok(())
-    }
-}
-impl RectTessellation {
-    fn new(rows: usize, cols: usize) -> Self {
-        assert_ge!(rows, 2);
-        assert_ge!(cols, 2);
-
-        RectTessellation {
-            rows, cols,
-            old_set: vec![false; rows * cols],
-            phase: (0, 0),
-        }
-    }
-    fn solver<Codes>(&mut self) -> RectSolver<'_, Codes>
-    where Codes: codesets::Set<Item = (isize, isize)>
-    {
-        let (r, c) = (self.rows, self.cols);
-        RectSolver::<Codes> {
-            base: RectSolverBase::<Codes> {
-                src: self,
-                codes: Default::default(),
-                interior_codes: Default::default(),
-                needed: 0,
-                prevs: vec![],
-            },
-            phases: {
-                let max_phase_x = (r as isize + 1) / 2;
-                let max_phase_y = (c as isize + 1) / 2;
-                std::iter::once((0, 0)).chain((1..=max_phase_x).map(|x| (x, 0))).chain((1..=max_phase_y).map(|y| (0, y))).collect()
-            },
-        }
-    }
-}
-impl Tessellation for RectTessellation {
-    fn size(&self) -> usize {
-        self.old_set.len()
-    }
-    fn try_satisfy<Codes, Adj>(&mut self, goal: Goal) -> Option<usize>
-    where Codes: codesets::Set<Item = (isize, isize)>, Adj: adj::AdjacentIterator
-    {
-        self.solver::<Codes>().try_satisfy::<Adj>(goal)
-    }
 }
 
 enum GeometryWithShapeError {
@@ -355,13 +166,17 @@ struct GeometrySolver<'a, Codes> {
 
     codes: Codes,
     needed: usize,
+
+    classes_to_check: Vec<usize>,
+    checked_classes: Vec<usize>,
 }
 impl<'a, Codes> GeometrySolver<'a, Codes>
 where Codes: codesets::Set<Item = (isize, isize)>
 {
-    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize)) -> Codes::LocatingCode {
+    fn get_locating_code<Adj: adj::AdjacentIterator>(&self, pos: (isize, isize), offset: (isize, isize)) -> Codes::LocatingCode {
         let mut v = Vec::with_capacity(9);
-        for x in Adj::at(pos) {
+        let class = Adj::class(pos.0 + offset.0, pos.1 + offset.1); // compute the effective class as if we applied the given offset
+        for x in Adj::with_class(pos.0, pos.1, class) {
             if self.old_set.contains(self.current_tessellation_map.0.get(&x).unwrap()) {
                 v.push(x);
             }
@@ -373,7 +188,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
         self.codes.clear();
         for p in self.interior {
             if p.0 >= row - 1 { break; }
-            let loc = self.get_locating_code::<Adj>(*p);
+            let loc = self.get_locating_code::<Adj>(*p, (0, 0)); // interior uses no offset
             if !self.codes.add(loc) {
                 return false;
             }
@@ -384,25 +199,23 @@ where Codes: codesets::Set<Item = (isize, isize)>
     where Adj: adj::AdjacentIterator, P: Iterator<Item = (usize, &'b (isize, isize))> + Clone
     {
         if self.needed == self.old_set.len() {
-            if self.is_old::<Adj>() {
-                return true;
-            }
+            return self.is_old::<Adj>();
         } else if let Some((i, &p)) = pos.next() {
             if i + (self.needed - self.old_set.len()) > self.shape.len() {
                 return false;
             }
 
             let good_so_far = !self.first_per_row.contains(&p) || self.is_old_interior_up_to::<Adj>(p.0);
-
-            if good_so_far {
-                self.old_set.insert(p);
-                if self.calc_old_min_interior::<Adj, _>(pos.clone()) {
-                    return true;
-                }
-                self.old_set.remove(&p);
-
-                return self.calc_old_min_interior::<Adj, _>(pos);
+            if !good_so_far {
+                return false;
             }
+
+            self.old_set.insert(p);
+            if self.calc_old_min_interior::<Adj, _>(pos.clone()) {
+                return true;
+            }
+            self.old_set.remove(&p);
+            return self.calc_old_min_interior::<Adj, _>(pos);
         }
 
         false
@@ -415,12 +228,31 @@ where Codes: codesets::Set<Item = (isize, isize)>
         'next_tess: for tess in self.tessellation_maps {
             self.current_tessellation_map = tess;
 
-            // check for validity
-            self.codes.clear();
-            for pos in self.shape_with_padding {
-                let loc = self.get_locating_code::<Adj>(*pos);
-                if !self.codes.add(loc) {
-                    continue 'next_tess; // if this tess had a failure, on to next tess
+            // check for validity in all induced classes, including the native one (class 0)
+            self.classes_to_check.clear();
+            self.checked_classes.clear();
+            self.classes_to_check.push(0);
+            while let Some(class) = self.classes_to_check.pop() {
+                self.checked_classes.push(class);
+                let c = Adj::CLASSES[class]; // for an effective offset (center), we can just use the class position itself
+
+                // check validity for this class - on failure move on to the next tessellation
+                self.codes.clear();
+                for pos in self.shape_with_padding {
+                    let loc = self.get_locating_code::<Adj>(*pos, c); // generate loc codes for this class
+                    if !self.codes.add(loc) {
+                        continue 'next_tess;
+                    }
+                }
+
+                // compute the induced classes from the current tessellation basis vectors
+                let b1 = tess.1;
+                let b2 = tess.2;
+                for &induced_class in &[Adj::class(c.0 + b1.0, c.1 + b1.1), Adj::class(c.0 + b2.0, c.1 + b2.1)] {
+                    // if we haven't seen it before, add it to the list of classes to check
+                    if !self.classes_to_check.contains(&induced_class) && !self.checked_classes.contains(&induced_class) {
+                        self.classes_to_check.push(induced_class);
+                    }
                 }
             }
 
@@ -432,6 +264,8 @@ where Codes: codesets::Set<Item = (isize, isize)>
         false // otherwise no tessellation worked - failure
     }
     fn try_satisfy<Adj: adj::AdjacentIterator>(&mut self, goal: Goal) -> Option<usize> {
+        assert_eq!(Adj::CLASSES[0], (0, 0)); // for the love of all that's holy let class 0 be an identity
+
         self.old_set.clear();
         self.needed = goal.get_value(self.shape.len());
 
@@ -439,6 +273,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
     }
 }
 
+#[derive(Debug)]
 enum TessellationFailure {
     NoValidTessellations,
 }
@@ -477,6 +312,9 @@ impl GeometryTessellation {
 
             codes: Default::default(),
             needed: 0,
+
+            classes_to_check: Vec::with_capacity(8),
+            checked_classes: Vec::with_capacity(8),
         }
     }
 }
@@ -1220,56 +1058,6 @@ impl FiniteGraph {
     }
 }
 
-#[test]
-fn test_rect_pos() {
-    let mut ggg = RectTessellation::new(4, 4);
-    let mut gg = ggg.solver::<codesets::OLD<(isize, isize)>>();
-    let g = &mut gg.base;
-
-    assert_eq!(g.id_to_inside(0, 0), 0);
-    assert_eq!(g.id_to_inside(1, 0), 4);
-    assert_eq!(g.id_to_inside(0, 1), 1);
-    assert_eq!(g.id_to_inside(2, 1), 9);
-
-    assert_eq!(g.id_to_inside(-1, 0), 12);
-    assert_eq!(g.id_to_inside(-1, 2), 14);
-    assert_eq!(g.id_to_inside(-1, 4), 12);
-    assert_eq!(g.id_to_inside(4, 4), 0);
-    assert_eq!(g.id_to_inside(4, 1), 1);
-    assert_eq!(g.id_to_inside(4, -1), 3);
-    assert_eq!(g.id_to_inside(-1, -1), 15);
-
-    g.src.phase = (1, 0);
-
-    assert_eq!(g.id_to_inside(0, 0), 0);
-    assert_eq!(g.id_to_inside(1, 0), 4);
-    assert_eq!(g.id_to_inside(0, 1), 1);
-    assert_eq!(g.id_to_inside(2, 1), 9);
-
-    assert_eq!(g.id_to_inside(-1, 0), 15);
-    assert_eq!(g.id_to_inside(-1, 2), 13);
-    assert_eq!(g.id_to_inside(-1, 4), 15);
-    assert_eq!(g.id_to_inside(4, 4), 1);
-    assert_eq!(g.id_to_inside(4, 1), 2);
-    assert_eq!(g.id_to_inside(4, -1), 0);
-    assert_eq!(g.id_to_inside(-1, -1), 14);
-
-    g.src.phase = (0, 1);
-
-    assert_eq!(g.id_to_inside(0, 0), 0);
-    assert_eq!(g.id_to_inside(1, 0), 4);
-    assert_eq!(g.id_to_inside(0, 1), 1);
-    assert_eq!(g.id_to_inside(2, 1), 9);
-
-    assert_eq!(g.id_to_inside(-1, 0), 12);
-    assert_eq!(g.id_to_inside(-1, 2), 14);
-    assert_eq!(g.id_to_inside(-1, 4), 0);
-    assert_eq!(g.id_to_inside(4, 4), 4);
-    assert_eq!(g.id_to_inside(4, 1), 1);
-    assert_eq!(g.id_to_inside(4, -1), 15);
-    assert_eq!(g.id_to_inside(-1, -1), 11);
-}
-
 fn parse_thresh(v: &str) -> f64 {
     match v.parse::<f64>() {
         Ok(v) if v > 0.0 && v <= 1.0 => v,
@@ -1679,7 +1467,7 @@ fn main() {
             if rows < 2 || cols < 2 {
                 crash!(2, "1xn and nx1 are not supported to avoid branch conditions");
             }
-            let tess = RectTessellation::new(rows, cols);
+            let tess = GeometryTessellation::try_from(Geometry::rectangle(rows, cols)).unwrap();// RectTessellation::new(rows, cols);
             tess_helper(tess, &args[4], &args[5], &args[6]);
         }
         Some("geo") => {
