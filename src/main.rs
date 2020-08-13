@@ -1269,9 +1269,13 @@ fn entropy_helper(big_geo: Geometry, entropy_size: &str, param: &str, graph: &st
     for thread in threads {
         thread.join().unwrap();
     }
+    let mut data = data.lock().unwrap(); // we no longer have running threads, so take ownership of the final data
 
-    // if we get to this point then we've exhausted all geometries and found no solutions
-    println!("no solution found");
+    // if we get to this point and there was no solution then we've exhausted all geometries and found no solutions
+    if !data.2 {
+        assert!(data.0.next().is_none()); // we should have processed all subgeometries
+        println!("no solution found (tested {} geometries)", data.1.len());
+    }
 }
 fn theo_helper(param: &str, graph: &str, thresh: &str, strategy: TheoStrategy, mut pipe: Option<&mut dyn io::Write>) -> bool {
     let param: Parameter = param.parse().unwrap_or_else(|_| crash!(2, "unknown parameter: {}", param));
