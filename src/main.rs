@@ -156,6 +156,7 @@ impl fmt::Display for Geometry {
     }
 }
 
+type TessellationMap = (HashMap<(isize, isize), (isize, isize)>, (isize, isize), (isize, isize));
 struct GeometrySolver<'a, Codes> {
     shape: &'a BTreeSet<(isize, isize)>,
     interior: &'a BTreeSet<(isize, isize)>,
@@ -163,8 +164,8 @@ struct GeometrySolver<'a, Codes> {
     first_per_row: &'a HashSet<(isize, isize)>,
     old_set: &'a mut BTreeSet<(isize, isize)>,
     
-    tessellation_maps: &'a [(HashMap<(isize, isize), (isize, isize)>, (isize, isize), (isize, isize))],
-    current_tessellation_map: &'a (HashMap<(isize, isize), (isize, isize)>, (isize, isize), (isize, isize)),
+    tessellation_maps: &'a [TessellationMap],
+    current_tessellation_map: &'a TessellationMap,
     src_basis_a: &'a mut (isize, isize),
     src_basis_b: &'a mut (isize, isize),
 
@@ -286,7 +287,7 @@ struct GeometryTessellation {
     interior: BTreeSet<(isize, isize)>,
     shape_with_padding: BTreeSet<(isize, isize)>,
     first_per_row: HashSet<(isize, isize)>,
-    tessellation_maps: Vec<(HashMap<(isize, isize), (isize, isize)>, (isize, isize), (isize, isize))>,
+    tessellation_maps: Vec<TessellationMap>,
     basis_a: (isize, isize),
     basis_b: (isize, isize),
 }
@@ -621,7 +622,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             shares.insert(neighbor, share.clone());
 
             // if this is strictly less than thresh it's an averaging candidate
-            if &share < &self.thresh {
+            if &share < self.thresh {
                 candidates.push((share, neighbor));
             }
         }
@@ -641,12 +642,12 @@ where Codes: codesets::Set<Item = (isize, isize)>
 
                 // compute its max share - use cache for lookups when possible (at this point center and neighbors are in cache, so only misses are boundary points)
                 let sh = match shares.entry(other).or_insert_with(|| self.calc_max_or_over_thresh_share_boundary::<Adj, ShareAdj>(other)) {
-                    x if &*x < &Share::zero() => return Share::zero(), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
+                    x if *x < Share::zero() => return Share::zero(), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
                     x => x,
                 };
 
                 // if this is strictly larger than thresh it's a problem
-                if &*sh > &self.thresh {
+                if &*sh > self.thresh {
                     adj_problems += 1;
 
                     // if this exceeds 1 and we're using averaging, stop here
@@ -663,7 +664,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
 
             // apply maximum safe discharging - if we drop down to or below the target thresh, we're done - yay!
             working_share -= max_safe_discharge;
-            if &working_share <= &self.thresh {
+            if &working_share <= self.thresh {
                 return working_share;
             }
         }
@@ -691,7 +692,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
                 
                 // compute average share - if share is over thresh, attempt to perform averaging if enabled, otherwise just use same value
                 let avg_share = {
-                    if &share > &self.thresh && self.strategy != TheoStrategy::NoAveraging {
+                    if &share > self.thresh && self.strategy != TheoStrategy::NoAveraging {
                         let avg = self.do_averaging::<Adj, ShareAdj>(&share);
                         assert_ge!(avg, Share::zero()); // should be valid
                         assert_le!(avg, share); // should never be worse than we started with
@@ -703,7 +704,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
                 };
 
                 // if it was over thresh, display as problem case
-                if &avg_share > &self.thresh {
+                if &avg_share > self.thresh {
                     // gather up all the info into a problem description
                     let geo = Geometry::for_printing(&self.closed_interior.iter().copied().collect(), self.detectors.iter());
                     let structure = format!("{}", geo);
@@ -773,7 +774,7 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
     for &center in Adj::CLASSES {
         // generate closed interior - everything up to radius 2
         closed_interior.clear();
-        closed_interior.extend(Adj::Open::at(center).flat_map(|p| Adj::Closed::at(p)));
+        closed_interior.extend(Adj::Open::at(center).flat_map(Adj::Closed::at));
 
         #[cfg(debug)]
         println!("closed interior:\n{}", Geometry::for_printing(&closed_interior, &Default::default()));
@@ -787,13 +788,13 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
 
         // generate exterior - everything at exactly radius 3
         exterior.clear();
-        exterior.extend(closed_interior.iter().flat_map(|p| Adj::Open::at(p)).filter(|p| !closed_interior.contains(p)));
+        exterior.extend(closed_interior.iter().flat_map(Adj::Open::at).filter(|p| !closed_interior.contains(p)));
 
         #[cfg(debug)]
         println!("exterior:\n{}", Geometry::for_printing(&exterior, &Default::default()));
 
         // generate boundary - everything at exactly radius 2
-        let boundary = collect(exterior.iter().flat_map(|p| Adj::Open::at(p)).filter(|p| closed_interior.contains(p)));
+        let boundary = collect(exterior.iter().flat_map(Adj::Open::at).filter(|p| closed_interior.contains(p)));
 
         #[cfg(debug)]
         println!("boundary:\n{}", Geometry::for_printing(&boundary, &Default::default()));
@@ -801,8 +802,8 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
         // generate neighbor map - maps neighbor of center to outer points
         neighbor_map.clear();
         for p in Adj::Open::at(center) {
-            let ball2 = collect(Adj::Open::at(p).flat_map(|x| Adj::Closed::at(x)));
-            let ball3 = collect(ball2.iter().flat_map(|x| Adj::Closed::at(x)));
+            let ball2 = collect(Adj::Open::at(p).flat_map(Adj::Closed::at));
+            let ball3 = collect(ball2.iter().flat_map(Adj::Closed::at));
 
             let field = collect(ball2.iter().filter(|x| !closed_interior.contains(x)));
             let total_exterior = collect(exterior.iter().chain(ball3.iter()).filter(|x| !closed_interior.contains(x) && !field.contains(x)));
@@ -824,8 +825,8 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
         // generate boundary map - maps interior boundary to farlands intersection within radius 2 of itself
         boundary_map.clear();
         for p in boundary.iter() {
-            let ball2 = collect(Adj::Open::at(p).flat_map(|x| Adj::Closed::at(x)));
-            let ball3 = collect(ball2.iter().flat_map(|x| Adj::Closed::at(x)));
+            let ball2 = collect(Adj::Open::at(p).flat_map(Adj::Closed::at));
+            let ball3 = collect(ball2.iter().flat_map(Adj::Closed::at));
 
             let field = collect(ball2.iter().filter(|x| !closed_interior.contains(x)));
             let total_exterior = collect(exterior.iter().chain(ball3.iter()).filter(|x| !closed_interior.contains(x) && !field.contains(x)));
@@ -873,32 +874,29 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
         }
     }
 
-    match pipe {
-        Some(f) => {
-            // if there were no problems then we've proven thresh works
-            if problems.is_empty() {
-                // attempt to convert to a floating-point representation
-                let float = match thresh.numer().to_string().parse::<f64>() {
-                    Ok(n) => match thresh.denom().to_string().parse::<f64>() {
-                        Ok(d) => (n / d).to_string(),
-                        Err(_) => "f64 overflow".to_string(),
-                    },
+    if let Some(f) = pipe {
+        // if there were no problems then we've proven thresh works
+        if problems.is_empty() {
+            // attempt to convert to a floating-point representation
+            let float = match thresh.numer().to_string().parse::<f64>() {
+                Ok(n) => match thresh.denom().to_string().parse::<f64>() {
+                    Ok(d) => (n / d).to_string(),
                     Err(_) => "f64 overflow".to_string(),
-                };
+                },
+                Err(_) => "f64 overflow".to_string(),
+            };
 
-                // print results and return what we found
-                writeln!(f, "found theo lower bound {} ({})", thresh, float).unwrap();
+            // print results and return what we found
+            writeln!(f, "found theo lower bound {} ({})", thresh, float).unwrap();
+        }
+        // otherwise there were problems - conservatively, all we can say is that it didn't work
+        else {
+            // print out all the problems we encountered (already in desired print order)
+            for p in problems.iter() {
+                writeln!(f, "problem: {} ({}) (center {:?})\n{}", p.share, p.avg_share, p.center, p.structure).unwrap();
             }
-            // otherwise there were problems - conservatively, all we can say is that it didn't work
-            else {
-                // print out all the problems we encountered (already in desired print order)
-                for p in problems.iter() {
-                    writeln!(f, "problem: {} ({}) (center {:?})\n{}", p.share, p.avg_share, p.center, p.structure).unwrap();
-                }
-                writeln!(f, "total problems: {}", problems.len()).unwrap();
-            }
-        },
-        None => (),
+            writeln!(f, "total problems: {}", problems.len()).unwrap();
+        }
     }
 
     // return true if we succeeded, otherwise false
@@ -1295,9 +1293,8 @@ fn theo_helper(param: &str, graph: &str, thresh: &str, strategy: TheoStrategy, m
     let graph: Graph = graph.parse().unwrap_or_else(|_| crash!(2, "unknown graph: {}", graph));
 
     let thresh = parse_thresh_frac(thresh);
-    match pipe {
-        Some(ref mut f) => writeln!(f, "lower bound for {:?} set on {:?} graph - {:?} thresh {}", param, graph, strategy, thresh).unwrap(),
-        None => (),
+    if let Some(ref mut f) = pipe {
+        writeln!(f, "lower bound for {:?} set on {:?} graph - {:?} thresh {}", param, graph, strategy, thresh).unwrap();
     }
 
     macro_rules! calc {

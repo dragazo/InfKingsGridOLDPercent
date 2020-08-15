@@ -171,7 +171,7 @@ where T: Ord + Default + Clone + Debug
     fn can_add(&self, loc: &Self::LocatingCode) -> bool {
         if loc.is_detector {
             // detectors must be at least 1-open-dominated
-            if loc.code.len() < 1 {
+            if loc.code.is_empty() {
                 return false;
             }
             // any pair of detectors and non-detectors must be 1-open-distinguished by something other than the detector
@@ -246,7 +246,7 @@ where T: Ord + Default + Clone + Debug
     fn can_add(&self, loc: &Self::LocatingCode) -> bool {
         if loc.is_detector {
             // detectors must be at least 1-open-dominated
-            if loc.code.len() < 1 {
+            if loc.code.is_empty() {
                 return false;
             }
             // must be 1-open-distinguished from other detectors

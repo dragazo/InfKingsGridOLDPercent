@@ -57,18 +57,12 @@ impl<T> PointMap<T> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = ((isize, isize), &T)> + Clone {
-        let (top, left, cols) = (self.top, self.left, self.cols);
-        self.data.iter().enumerate().filter(|(_, v)| v.is_some()).map(move |(k, v)| {
-            let k = k as isize;
-            ((top + k / cols, left + k % cols), v.as_ref().unwrap())
-        })
+        let (top, bottom, left, right) = (self.top, self.bottom, self.left, self.right);
+        (top..=bottom).flat_map(move |r| (left..=right).map(move |c| (r, c))).zip(self.data.iter()).filter_map(|(k, v)| Some((k, v.as_ref()?)))
     }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = ((isize, isize), &mut T)> {
-        let (top, left, cols) = (self.top, self.left, self.cols);
-        self.data.iter_mut().enumerate().filter(|(_, v)| v.is_some()).map(move |(k, v)| {
-            let k = k as isize;
-            ((top + k / cols, left + k % cols), v.as_mut().unwrap())
-        })
+        let (top, bottom, left, right) = (self.top, self.bottom, self.left, self.right);
+        (top..=bottom).flat_map(move |r| (left..=right).map(move |c| (r, c))).zip(self.data.iter_mut()).filter_map(|(k, v)| Some((k, v.as_mut()?)))
     }
 }
 impl<T> Extend<((isize, isize), T)> for PointMap<T> {
