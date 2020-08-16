@@ -411,26 +411,22 @@ impl Tessellation for GeometryTessellation {
     }
 }
 
-#[derive(Default)]
-struct BoundaryLands {
-    field: Vec<(isize, isize)>,
-    total_exterior: Vec<(isize, isize)>,
-}
-#[derive(Default)]
-struct NeighborLands {
+struct ExpansionLands {
     field: Vec<(isize, isize)>,
     total_exterior: Vec<(isize, isize)>,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum TheoStrategy {
-    NoAveraging,
-    AverageWithNeighbors,
-    DischargeToNeighbors,
+    Trivial,
+    Avg,
+    Dis,
+    DisWeightExcess,
+    DisWeightShare,
 }
 impl Default for TheoStrategy {
     fn default() -> Self {
-        TheoStrategy::NoAveraging
+        TheoStrategy::Trivial
     }
 }
 
@@ -449,14 +445,18 @@ struct TheoProblem {
     structure: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MaxShareMode {
+    Max,
+    MaxOrOverThresh,
+}
 struct TheoSearcher<'a, 'b, Codes> {
     center: (isize, isize),
     closed_interior: &'a [(isize, isize)], // everything up to radius 2
     exterior: &'a [(isize, isize)], // everything at exactly radius 3
     detectors: &'a mut PointSet,
 
-    neighbor_map: &'a PointMap<NeighborLands>, // maps a neighbor of center (exactly radius 1) to outer points
-    boundary_map: &'a PointMap<BoundaryLands>, // maps a boundary point (exactly radius 2) to outer points
+    expansion_map: &'a PointMap<ExpansionLands>, // maps a neighbor of radius 1 or 2 to its outer points up to radius 2, plus a radius 3 border
 
     codes: &'a mut Codes,
 
@@ -508,7 +508,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
         share
     }
     #[must_use]
-    fn calc_max_or_over_thresh_share_boundary_recursive<Adj, ShareAdj, P>(&mut self, pos: (isize, isize), lands: &BoundaryLands, mut ext_pos: P) -> Share
+    fn calc_max_share_expansion_recursive<Adj, ShareAdj, P>(&mut self, pos: (isize, isize), lands: &ExpansionLands, mut ext_pos: P, mode: MaxShareMode) -> Share
     where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
     {
         match ext_pos.next() {
@@ -523,12 +523,12 @@ where Codes: codesets::Set<Item = (isize, isize)>
             }
             Some(p) => {
                 self.detectors.insert(p);
-                let r1 = self.calc_max_or_over_thresh_share_boundary_recursive::<Adj, ShareAdj, _>(pos, lands, ext_pos.clone());
-                if &r1 > self.thresh {
-                    return r1; // if > thresh max will be too - short circuit
+                let r1 = self.calc_max_share_expansion_recursive::<Adj, ShareAdj, _>(pos, lands, ext_pos.clone(), mode);
+                if mode == MaxShareMode::MaxOrOverThresh && &r1 > self.thresh {
+                    return r1; // if > thresh max will be too - short circuit if allowed
                 }
                 self.detectors.remove(&p);
-                let r2 = self.calc_max_or_over_thresh_share_boundary_recursive::<Adj, ShareAdj, _>(pos, lands, ext_pos);
+                let r2 = self.calc_max_share_expansion_recursive::<Adj, ShareAdj, _>(pos, lands, ext_pos, mode);
 
                 // return max share found
                 return if r1 >= r2 { r1 } else { r2 };
@@ -538,10 +538,10 @@ where Codes: codesets::Set<Item = (isize, isize)>
     // expands around boundary to radius 2, returning the maximum share or some possible share > thresh for short-circuitting.
     // returns -1 if no valid configuration exists.
     #[must_use]
-    fn calc_max_or_over_thresh_share_boundary<Adj, ShareAdj>(&mut self, pos: (isize, isize)) -> Share
+    fn calc_max_share_expansion<Adj, ShareAdj>(&mut self, pos: (isize, isize), mode: MaxShareMode) -> Share
     where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
     {
-        let lands = self.boundary_map.get(&pos).unwrap();
+        let lands = self.expansion_map.get(&pos).unwrap();
 
         // go ahead and prepare the total exterior before we start searching so we don't have to do it at every terminal node
         for p in lands.total_exterior.iter() {
@@ -549,51 +549,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
         }
 
         // compute the max share recursively
-        self.calc_max_or_over_thresh_share_boundary_recursive::<Adj, ShareAdj, _>(pos, lands, lands.field.iter().copied())
-    }
-    #[must_use]
-    fn calc_max_or_over_thresh_share_neighbor_recursive<Adj, ShareAdj, P>(&mut self, neighbor: (isize, isize), lands: &NeighborLands, mut ext_pos: P) -> Share
-    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
-    {
-        match ext_pos.next() {
-            None => {
-                // if it's an invalid configuration, don't even bother looking at it
-                if !self.is_valid_over::<Adj, _>(self.closed_interior.iter().chain(lands.field.iter()).copied()) {
-                    return -Share::one(); // return -1 to denote nothing (no share here at all)
-                }
-                
-                // otherwise return the share
-                return self.calc_share::<Adj, ShareAdj>(neighbor);
-            }
-            Some(p) => {
-                self.detectors.insert(p);
-                let r1 = self.calc_max_or_over_thresh_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, ext_pos.clone());
-                if &r1 > self.thresh {
-                    return r1; // if > thresh max will be too - short circuit
-                }
-                self.detectors.remove(&p);
-                let r2 = self.calc_max_or_over_thresh_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, ext_pos);
-
-                // return largest share found
-                return if r1 >= r2 { r1 } else { r2 };
-            }
-        }
-    }
-    // expands around neighbor to radius 2, returning the maximum share.
-    // returns -1 if no valid configuration exists.
-    #[must_use]
-    fn calc_max_or_over_thresh_share_neighbor<Adj, ShareAdj>(&mut self, neighbor: (isize, isize)) -> Share
-    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
-    {
-        let lands = self.neighbor_map.get(&neighbor).unwrap();
-
-        // go ahead and prepare the total exterior before we start searching so we don't have to do it at every terminal node
-        for p in lands.total_exterior.iter() {
-            self.detectors.insert(*p);
-        }
-
-        // compute with recursive helper
-        self.calc_max_or_over_thresh_share_neighbor_recursive::<Adj, ShareAdj, _>(neighbor, lands, lands.field.iter().copied())
+        self.calc_max_share_expansion_recursive::<Adj, ShareAdj, _>(pos, lands, lands.field.iter().copied(), mode)
     }
     #[must_use]
     fn do_averaging<Adj, ShareAdj>(&mut self, center_share: &Share) -> Share
@@ -608,6 +564,13 @@ where Codes: codesets::Set<Item = (isize, isize)>
         // also keep track of averaging candidates
         let mut candidates: Vec<(Share, (isize, isize))> = Default::default();
 
+        // compute the weakest max share mode we need in order to work
+        let max_share_mode = match self.strategy {
+            TheoStrategy::Trivial => panic!("we shouldn't be here"),
+            TheoStrategy::Avg | TheoStrategy::Dis => MaxShareMode::MaxOrOverThresh,
+            TheoStrategy::DisWeightExcess | TheoStrategy::DisWeightShare => MaxShareMode::Max,
+        };
+
         // for each neighbor of center which is a detector
         for neighbor in Adj::Open::at(self.center) {
             if !self.detectors.contains(&neighbor) {
@@ -615,7 +578,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
             }
 
             // compute max share of neighbor and store in cache
-            let share = match self.calc_max_or_over_thresh_share_neighbor::<Adj, ShareAdj>(neighbor) {
+            let share = match self.calc_max_share_expansion::<Adj, ShareAdj>(neighbor, max_share_mode) {
                 x if x < Share::zero() => return Share::zero(), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
                 x => x,
             };
@@ -627,40 +590,53 @@ where Codes: codesets::Set<Item = (isize, isize)>
             }
         }
 
-        //  sort averagee candidates by ascending share (use position to break ties just to guarantee invariant exec order)
+        // sort averagee/discharge candidates by ascending share (use position to break ties just to guarantee invariant exec order)
         candidates.sort();
 
-        // go through the average candidates and keep track of working share as we do averaging/discharging
+        // go through the average/discharge candidates and keep track of working share as we do averaging/discharging
         let mut working_share = center_share.clone();
         'next_candidate: for (share, neighbor) in candidates {
             // look at each of my adjacent detectors and keep track of how many problems i'm next to
             let mut adj_problems = 0;
+            let mut sum_weights = Share::zero(); // this is only updated if using weighted strategy
             for other in Adj::Open::at(neighbor) {
                 if !self.detectors.contains(&other) {
                     continue;
                 }
 
                 // compute its max share - use cache for lookups when possible (at this point center and neighbors are in cache, so only misses are boundary points)
-                let sh = match shares.entry(other).or_insert_with(|| self.calc_max_or_over_thresh_share_boundary::<Adj, ShareAdj>(other)) {
+                let sh = match shares.entry(other).or_insert_with(|| self.calc_max_share_expansion::<Adj, ShareAdj>(other, max_share_mode)) {
                     x if *x < Share::zero() => return Share::zero(), // if invalid there were no legal configurations in the first place - return something that will always be <= thresh
                     x => x,
                 };
 
                 // if this is strictly larger than thresh it's a problem
                 if &*sh > self.thresh {
-                    adj_problems += 1;
+                    adj_problems += 1; // mark as a problem
 
-                    // if this exceeds 1 and we're using averaging, stop here
-                    if adj_problems > 1 && self.strategy == TheoStrategy::AverageWithNeighbors {
-                        continue 'next_candidate;
+                    // do any extra needed work for whatever strategy we're using
+                    match self.strategy {
+                        TheoStrategy::Trivial => panic!("we shouldn't be here"),
+                        TheoStrategy::Avg => if adj_problems > 1 { continue 'next_candidate; } // averaging is discharging that requires adj_problems == 1
+                        TheoStrategy::Dis => (),                                               // discharge has no other requirements
+                        TheoStrategy::DisWeightExcess => sum_weights += &*sh - self.thresh,    // weighted discharging with excess
+                        TheoStrategy::DisWeightShare => sum_weights += &*sh,                   // weighted discharging with share
                     }
                 }
             }
             assert_ne!(adj_problems, 0); // this should never be zero because by hypothesis center itself is a problem
 
-            // compute the total amount of safe discharge (we conservatively only allow uniform discharge into any non-problem neighbor)
-            let max_safe_discharge = (self.thresh - share) / Share::from_integer(adj_problems.into());
-            assert_gt!(max_safe_discharge, Share::zero());
+            // compute the total amount of safe discharge
+            let max_safe_discharge = {
+                let pool = self.thresh - share; // the total amount of share this neighbor can accept
+                match self.strategy {
+                    TheoStrategy::Trivial => panic!("we shouldn't be here"),
+                    TheoStrategy::Avg | TheoStrategy::Dis => pool / Share::from_integer(adj_problems.into()), // same logic due to above
+                    TheoStrategy::DisWeightExcess => pool * ((center_share - self.thresh) / sum_weights),     // same logic as avg/dis, except weighted by excess
+                    TheoStrategy::DisWeightShare => pool * (center_share / sum_weights),                      // same but different weights
+                }
+            };
+            assert_gt!(max_safe_discharge, Share::zero()); // sanity check
 
             // apply maximum safe discharging - if we drop down to or below the target thresh, we're done - yay!
             working_share -= max_safe_discharge;
@@ -692,7 +668,7 @@ where Codes: codesets::Set<Item = (isize, isize)>
                 
                 // compute average share - if share is over thresh, attempt to perform averaging if enabled, otherwise just use same value
                 let avg_share = {
-                    if &share > self.thresh && self.strategy != TheoStrategy::NoAveraging {
+                    if &share > self.thresh && self.strategy != TheoStrategy::Trivial {
                         let avg = self.do_averaging::<Adj, ShareAdj>(&share);
                         assert_ge!(avg, Share::zero()); // should be valid
                         assert_le!(avg, share); // should never be worse than we started with
@@ -755,8 +731,7 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
     let mut exterior = PointSet::default();        // everything at exactly radius 3
     let mut detectors = PointSet::default();
 
-    let mut neighbor_map = PointMap::default(); // maps a neighbor of center (exactly radius 1) to outer points
-    let mut boundary_map = PointMap::default(); // maps a boundary point (exactly radius 2) to outer points
+    let mut expansion_map = PointMap::default();
 
     let mut codes: Codes = Default::default();
     let mut problems: BTreeSet<TheoProblem> = Default::default();
@@ -780,8 +755,7 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
         exterior.set_bounds(bounds.0, bounds.1);
         detectors.set_bounds(bounds.0, bounds.1);
     
-        neighbor_map.set_bounds(bounds.0, bounds.1);
-        boundary_map.set_bounds(bounds.0, bounds.1);
+        expansion_map.set_bounds(bounds.0, bounds.1);
         
         // --------------------------------------------------------------------------------
 
@@ -812,49 +786,27 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
         #[cfg(debug)]
         println!("boundary:\n{}", Geometry::for_printing(&boundary, &Default::default()));
 
-        // generate neighbor map - maps neighbor of center to outer points
-        neighbor_map.clear();
-        for p in Adj::Open::at(center) {
+        // clear and repopulate expansion map with neighbors and boundary points
+        expansion_map.clear();
+        for p in Adj::Open::at(center).chain(boundary.iter()) {
             let ball2 = collect(&bounds, Adj::Open::at(p).flat_map(Adj::Closed::at));
             let ball3 = collect(&bounds, ball2.iter().flat_map(Adj::Closed::at));
 
             let field = collect(&bounds, ball2.iter().filter(|x| !closed_interior.contains(x)));
             let total_exterior = collect(&bounds, exterior.iter().chain(ball3.iter()).filter(|x| !closed_interior.contains(x) && !field.contains(x)));
 
-            let lands = NeighborLands {
+            let lands = ExpansionLands {
                 field: field.iter().collect(),
                 total_exterior: total_exterior.iter().collect(),
             };
             #[cfg(debug)]
             {
-                println!("neighbor {:?} field:          {:?}", p, lands.field);
-                println!("neighbor {:?} total_exterior: {:?}", p, lands.total_exterior);
+                println!("{:?} field:          {:?}", p, lands.field);
+                println!("{:?} total_exterior: {:?}", p, lands.total_exterior);
                 println!();
             }
 
-            neighbor_map.insert(p, lands);
-        }
-
-        // generate boundary map - maps interior boundary to farlands intersection within radius 2 of itself
-        boundary_map.clear();
-        for p in boundary.iter() {
-            let ball2 = collect(&bounds, Adj::Open::at(p).flat_map(Adj::Closed::at));
-            let ball3 = collect(&bounds, ball2.iter().flat_map(Adj::Closed::at));
-
-            let field = collect(&bounds, ball2.iter().filter(|x| !closed_interior.contains(x)));
-            let total_exterior = collect(&bounds, exterior.iter().chain(ball3.iter()).filter(|x| !closed_interior.contains(x) && !field.contains(x)));
-
-            let lands = BoundaryLands {
-                field: field.iter().collect(),
-                total_exterior: total_exterior.iter().collect(),
-            };
-            #[cfg(debug)]
-            {
-                println!("boundary {:?} field:          {:?}", p, lands.field);
-                println!("boundary {:?} total_exterior: {:?}", p, lands.total_exterior);
-                println!();
-            }
-            boundary_map.insert(p, lands);
+            expansion_map.insert(p, lands);
         }
 
         // each pass starts with no detectors except the center
@@ -870,8 +822,7 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
             exterior: &exterior_vec,
             detectors: &mut detectors,
 
-            neighbor_map: &neighbor_map,
-            boundary_map: &boundary_map,
+            expansion_map: &expansion_map,
 
             codes: &mut codes,
 
@@ -1453,37 +1404,61 @@ fn main() {
             if args.len() != 4 {
                 crash!(1, "usage: {} auto-theo [set-type] [graph]", args[0]);
             }
-            auto_theo_helper(&args[2], &args[3], TheoStrategy::NoAveraging);
+            auto_theo_helper(&args[2], &args[3], TheoStrategy::Trivial);
         }
         Some("auto-theo-avg") => {
             if args.len() != 4 {
                 crash!(1, "usage: {} auto-theo-avg [set-type] [graph]", args[0]);
             }
-            auto_theo_helper(&args[2], &args[3], TheoStrategy::AverageWithNeighbors);
+            auto_theo_helper(&args[2], &args[3], TheoStrategy::Avg);
         }
         Some("auto-theo-dis") => {
             if args.len() != 4 {
                 crash!(1, "usage: {} auto-theo-dis [set-type] [graph]", args[0]);
             }
-            auto_theo_helper(&args[2], &args[3], TheoStrategy::DischargeToNeighbors);
+            auto_theo_helper(&args[2], &args[3], TheoStrategy::Dis);
+        }
+        Some("auto-theo-dis-weight-excess") => {
+            if args.len() != 4 {
+                crash!(1, "usage: {} auto-theo-dis-weight-excess [set-type] [graph]", args[0]);
+            }
+            auto_theo_helper(&args[2], &args[3], TheoStrategy::DisWeightExcess);
+        }
+        Some("auto-theo-dis-weight-share") => {
+            if args.len() != 4 {
+                crash!(1, "usage: {} auto-theo-dis-weight-share [set-type] [graph]", args[0]);
+            }
+            auto_theo_helper(&args[2], &args[3], TheoStrategy::DisWeightShare);
         }
         Some("theo") => {
             if args.len() != 5 {
                 crash!(1, "usage: {} theo [set-type] [graph] [thresh]", args[0]);
             }
-            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::NoAveraging, Some(&mut io::stdout()));
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::Trivial, Some(&mut io::stdout()));
         }
         Some("theo-avg") => {
             if args.len() != 5 {
                 crash!(1, "usage: {} theo-avg [set-type] [graph] [thresh]", args[0]);
             }
-            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::AverageWithNeighbors, Some(&mut io::stdout()));
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::Avg, Some(&mut io::stdout()));
         }
         Some("theo-dis") => {
             if args.len() != 5 {
                 crash!(1, "usage: {} theo-dis [set-type] [graph] [thresh]", args[0]);
             }
-            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::DischargeToNeighbors, Some(&mut io::stdout()));
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::Dis, Some(&mut io::stdout()));
+        }
+        Some("theo-dis-weight-excess") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} theo-dis-weight-excess [set-type] [graph] [thresh]", args[0]);
+            }
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::DisWeightExcess, Some(&mut io::stdout()));
+        }
+        Some("theo-dis-weight-share") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} theo-dis-weight-share [set-type] [graph] [thresh]", args[0]);
+            }
+            theo_helper(&args[2], &args[3], &args[4], TheoStrategy::DisWeightShare, Some(&mut io::stdout()));
         }
         Some("rect") => {
             if args.len() != 7 {
@@ -1539,22 +1514,22 @@ fn main() {
 
 #[test]
 fn test_theo_hex_works() {
-    assert!(theo_helper("ld", "hex", "1/3", TheoStrategy::DischargeToNeighbors, None));
-    assert!(theo_helper("det:ld", "hex", "3/5", TheoStrategy::DischargeToNeighbors, None));
-    assert!(theo_helper("red:ic", "hex", "4/7", TheoStrategy::DischargeToNeighbors, None));
-    assert!(theo_helper("det:ic", "hex", "12/17", TheoStrategy::DischargeToNeighbors, None));
-    assert!(theo_helper("err:ic", "hex", "5/6", TheoStrategy::DischargeToNeighbors, None));
-    assert!(theo_helper("old", "hex", "1/2", TheoStrategy::DischargeToNeighbors, None));
+    assert!(theo_helper("ld", "hex", "1/3", TheoStrategy::Dis, None));
+    assert!(theo_helper("det:ld", "hex", "3/5", TheoStrategy::Dis, None));
+    assert!(theo_helper("red:ic", "hex", "4/7", TheoStrategy::Dis, None));
+    assert!(theo_helper("det:ic", "hex", "12/17", TheoStrategy::Dis, None));
+    assert!(theo_helper("err:ic", "hex", "5/6", TheoStrategy::Dis, None));
+    assert!(theo_helper("old", "hex", "1/2", TheoStrategy::Dis, None));
 }
 
 #[test]
 fn test_theo_tmb_works() {
-    assert!(theo_helper("red:ic", "tmb", "4/9", TheoStrategy::DischargeToNeighbors, None));
-    assert!(theo_helper("det:ic", "tmb", "3/5", TheoStrategy::DischargeToNeighbors, None));
-    assert!(theo_helper("err:ic", "tmb", "12/19", TheoStrategy::DischargeToNeighbors, None));
-    assert!(theo_helper("det:ld", "tmb", "3/5", TheoStrategy::DischargeToNeighbors, None));
+    assert!(theo_helper("red:ic", "tmb", "4/9", TheoStrategy::Dis, None));
+    assert!(theo_helper("det:ic", "tmb", "3/5", TheoStrategy::Dis, None));
+    assert!(theo_helper("err:ic", "tmb", "12/19", TheoStrategy::Dis, None));
+    assert!(theo_helper("det:ld", "tmb", "3/5", TheoStrategy::Dis, None));
 }
 #[test]
 fn test_theo_tmb_not_works() {
-    assert!(!theo_helper("red:ic", "tmb", "0.44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444445", TheoStrategy::DischargeToNeighbors, None));
+    assert!(!theo_helper("red:ic", "tmb", "0.44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444445", TheoStrategy::Dis, None));
 }
