@@ -9,25 +9,50 @@ pub struct PointMap<T> {
 
     cols: isize,
 }
+impl<T> Default for PointMap<T> {
+    fn default() -> Self {
+        Self {
+            data: Default::default(),
+
+            top: 0,
+            bottom: -1, // top > bottom denotes empty
+            left: 0,
+            right: -1, // left > right denotes empty
+
+            cols: 0, // no columns for empty
+        }
+    }
+}
 impl<T> PointMap<T> {
     pub fn with_bounds(a: (isize, isize), b: (isize, isize)) -> Self {
+        let mut v = Self {
+            data: vec![],
+            top: 0, bottom: 0, left: 0, right: 0,
+            cols: 0,
+        };
+        v.set_bounds(a, b);
+        v
+    }
+    pub fn set_bounds(&mut self, a: (isize, isize), b: (isize, isize)) {
         let (top, bottom) = if a.0 <= b.0 { (a.0, b.0) } else { (b.0, a.0) };
         let (left, right) = if a.1 <= b.1 { (a.1, b.1) } else { (b.1, a.1) };
 
         let rows = bottom - top + 1;
         let cols = right - left + 1;
         let size = (rows * cols) as usize;
-        
-        let mut data: Vec<_> = Vec::with_capacity(size);
+
+        self.data.clear();
+        self.data.reserve(size);
         for _ in 0..size {
-            data.push(None);
+            self.data.push(None);
         }
 
-        Self {
-            data,
-            top, bottom, left, right,
-            cols,
-        }
+        self.top = top;
+        self.bottom = bottom;
+        self.left = left;
+        self.right = right;
+        
+        self.cols = cols;
     }
     pub fn clear(&mut self) {
         for i in self.data.iter_mut() {
@@ -75,13 +100,16 @@ impl<T> Extend<((isize, isize), T)> for PointMap<T> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PointSet {
     w: PointMap<()>,
 }
 impl PointSet {
     pub fn with_bounds(a: (isize, isize), b: (isize, isize)) -> Self {
         Self { w: PointMap::with_bounds(a, b) }
+    }
+    pub fn set_bounds(&mut self, a: (isize, isize), b: (isize, isize)) {
+        self.w.set_bounds(a, b)
     }
     pub fn clear(&mut self) {
         self.w.clear()

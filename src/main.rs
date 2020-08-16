@@ -750,20 +750,20 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
     assert_gt!(thresh, Share::zero()); // we require thresh in (0, 1]
     assert_le!(thresh, Share::one());
 
-    let mut closed_interior = PointSet::with_bounds((-5, -5), (5, 5)); // everything up to radius 2
-    let mut open_interior = PointSet::with_bounds((-5, -5), (5, 5));   // everything up to radius 2 except center
-    let mut exterior = PointSet::with_bounds((-5, -5), (5, 5));        // everything at exactly radius 3
-    let mut detectors = PointSet::with_bounds((-5, -5), (5, 5));
+    let mut closed_interior = PointSet::default(); // everything up to radius 2
+    let mut open_interior = PointSet::default();   // everything up to radius 2 except center
+    let mut exterior = PointSet::default();        // everything at exactly radius 3
+    let mut detectors = PointSet::default();
 
-    let mut neighbor_map = PointMap::<NeighborLands>::with_bounds((-5, -5), (5, 5)); // maps a neighbor of center (exactly radius 1) to outer points
-    let mut boundary_map = PointMap::<BoundaryLands>::with_bounds((-5, -5), (5, 5)); // maps a boundary point (exactly radius 2) to outer points
+    let mut neighbor_map = PointMap::default(); // maps a neighbor of center (exactly radius 1) to outer points
+    let mut boundary_map = PointMap::default(); // maps a boundary point (exactly radius 2) to outer points
 
     let mut codes: Codes = Default::default();
     let mut problems: BTreeSet<TheoProblem> = Default::default();
 
     // convenience function since PointSet cannot impl FromIterator
-    fn collect<I: IntoIterator<Item = (isize, isize)>>(iter: I) -> PointSet {
-        let mut s = PointSet::with_bounds((-5, -5), (5, 5));
+    fn collect<I: IntoIterator<Item = (isize, isize)>>(bounds: &((isize, isize), (isize, isize)), iter: I) -> PointSet {
+        let mut s = PointSet::with_bounds(bounds.0, bounds.1);
         s.extend(iter);
         s
     };
@@ -772,6 +772,19 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
 
     // fold recursive results from all provided center values
     for &center in Adj::CLASSES {
+        // set bounds for all the sets/maps we need
+        let bounds = ((center.0 - 5, center.1 - 5), (center.0 + 5, center.1 + 5));
+
+        closed_interior.set_bounds(bounds.0, bounds.1);
+        open_interior.set_bounds(bounds.0, bounds.1);
+        exterior.set_bounds(bounds.0, bounds.1);
+        detectors.set_bounds(bounds.0, bounds.1);
+    
+        neighbor_map.set_bounds(bounds.0, bounds.1);
+        boundary_map.set_bounds(bounds.0, bounds.1);
+        
+        // --------------------------------------------------------------------------------
+
         // generate closed interior - everything up to radius 2
         closed_interior.clear();
         closed_interior.extend(Adj::Open::at(center).flat_map(Adj::Closed::at));
@@ -794,7 +807,7 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
         println!("exterior:\n{}", Geometry::for_printing(&exterior, &Default::default()));
 
         // generate boundary - everything at exactly radius 2
-        let boundary = collect(exterior.iter().flat_map(Adj::Open::at).filter(|p| closed_interior.contains(p)));
+        let boundary = collect(&bounds, exterior.iter().flat_map(Adj::Open::at).filter(|p| closed_interior.contains(p)));
 
         #[cfg(debug)]
         println!("boundary:\n{}", Geometry::for_printing(&boundary, &Default::default()));
@@ -802,11 +815,11 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
         // generate neighbor map - maps neighbor of center to outer points
         neighbor_map.clear();
         for p in Adj::Open::at(center) {
-            let ball2 = collect(Adj::Open::at(p).flat_map(Adj::Closed::at));
-            let ball3 = collect(ball2.iter().flat_map(Adj::Closed::at));
+            let ball2 = collect(&bounds, Adj::Open::at(p).flat_map(Adj::Closed::at));
+            let ball3 = collect(&bounds, ball2.iter().flat_map(Adj::Closed::at));
 
-            let field = collect(ball2.iter().filter(|x| !closed_interior.contains(x)));
-            let total_exterior = collect(exterior.iter().chain(ball3.iter()).filter(|x| !closed_interior.contains(x) && !field.contains(x)));
+            let field = collect(&bounds, ball2.iter().filter(|x| !closed_interior.contains(x)));
+            let total_exterior = collect(&bounds, exterior.iter().chain(ball3.iter()).filter(|x| !closed_interior.contains(x) && !field.contains(x)));
 
             let lands = NeighborLands {
                 field: field.iter().collect(),
@@ -825,11 +838,11 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
         // generate boundary map - maps interior boundary to farlands intersection within radius 2 of itself
         boundary_map.clear();
         for p in boundary.iter() {
-            let ball2 = collect(Adj::Open::at(p).flat_map(Adj::Closed::at));
-            let ball3 = collect(ball2.iter().flat_map(Adj::Closed::at));
+            let ball2 = collect(&bounds, Adj::Open::at(p).flat_map(Adj::Closed::at));
+            let ball3 = collect(&bounds, ball2.iter().flat_map(Adj::Closed::at));
 
-            let field = collect(ball2.iter().filter(|x| !closed_interior.contains(x)));
-            let total_exterior = collect(exterior.iter().chain(ball3.iter()).filter(|x| !closed_interior.contains(x) && !field.contains(x)));
+            let field = collect(&bounds, ball2.iter().filter(|x| !closed_interior.contains(x)));
+            let total_exterior = collect(&bounds, exterior.iter().chain(ball3.iter()).filter(|x| !closed_interior.contains(x) && !field.contains(x)));
 
             let lands = BoundaryLands {
                 field: field.iter().collect(),
