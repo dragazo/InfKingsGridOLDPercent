@@ -507,6 +507,81 @@ where Codes: codesets::Set<Item = (isize, isize)>
         }
         share
     }
+    fn max_simultaneous_problem_neighbors_recursive<Adj, ShareAdj>(&mut self, neighbors: &[(isize, isize)], total_field: &[(isize, isize)], total_exterior: &[(isize, isize)], mut field_pos: std::slice::Iter<(isize, isize)>) -> Option<usize>
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
+    {
+        match field_pos.next() {
+            None => {
+                // if it's not a valid configuration, don't even bother looking at it (return None to denote illegality)
+                for point in total_exterior {
+                    self.detectors.insert(*point);
+                }
+                if !self.is_valid_over::<Adj, _>(self.closed_interior.iter().chain(total_field.iter()).copied()) {
+                    return None;
+                }
+                // otherwise count the number of neighbors with problem shares
+                Some(neighbors.iter().filter(|x| self.calc_share::<Adj, ShareAdj>(**x) > *self.thresh).count())
+            }
+            Some(p) => {
+                // perform the recursive field expansion
+                self.detectors.insert(*p);
+                let a = self.max_simultaneous_problem_neighbors_recursive::<Adj, ShareAdj>(neighbors, total_field, total_exterior, field_pos.clone());
+                self.detectors.remove(p);
+                let b = self.max_simultaneous_problem_neighbors_recursive::<Adj, ShareAdj>(neighbors, total_field, total_exterior, field_pos.clone());
+
+                // return none if both failed, otherwise return whatever was larger
+                match (a, b) {
+                    (None, None) => None,
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                }
+            }
+        }
+    }
+    fn max_simultaneous_problem_neighbors<Adj, ShareAdj>(&mut self, pos: (isize, isize)) -> usize
+    where Adj: AdjacentIterator, ShareAdj: AdjacentIterator
+    {
+        assert!(self.detectors.contains(&pos));
+        let mut non_center_neighbors = Vec::with_capacity(8);
+        for neighbor in Adj::Open::at(pos) {
+            if neighbor != self.center && self.detectors.contains(&neighbor) {
+                non_center_neighbors.push(neighbor);
+            }
+        }
+        if non_center_neighbors.is_empty() {
+            return 1; // if there are no non-center neighbors, we just have the one problem (center is assumed to have problem share)
+        }
+
+        // gather up all the fields we will have to expand in total
+        let bounds = ((self.center.0 - 5, self.center.1 - 5), (self.center.0 + 5, self.center.1 + 5));
+        let mut total_field = PointSet::with_bounds(bounds.0, bounds.1);
+        let mut total_exterior = PointSet::with_bounds(bounds.0, bounds.1);
+
+        for neighbor in non_center_neighbors.iter() {
+            let lands = self.expansion_map.get(neighbor).unwrap();
+            total_field.extend(lands.field.iter().copied());
+            total_exterior.extend(lands.total_exterior.iter().copied());
+        }
+        for point in total_field.iter() {
+            total_exterior.remove(&point);
+        }
+
+        #[cfg(debug)]
+        {
+            println!("total field:\n{}", Geometry::for_printing(&total_field.iter().collect(), self.detectors.iter()));
+            println!("total exterior:\n{}", Geometry::for_printing(&total_exterior.iter().collect(), self.detectors.iter()));
+            println!("badditude: {}", total_field.iter().count());
+            println!("-------------------------------------");
+        }
+
+        // convert sets into vectors for fastitude
+        let total_field = total_field.iter().collect::<Vec<_>>();
+        let total_exterior = total_exterior.iter().collect::<Vec<_>>();
+        
+        // we have the center problem (by assumption), plus max of non-center neighbors via recursive expansion
+        1 + self.max_simultaneous_problem_neighbors_recursive::<Adj, ShareAdj>(&non_center_neighbors, &total_field, &total_exterior, total_field.iter()).unwrap()
+    }
     #[must_use]
     fn calc_max_share_expansion_recursive<Adj, ShareAdj, P>(&mut self, pos: (isize, isize), lands: &ExpansionLands, mut ext_pos: P, mode: MaxShareMode) -> Share
     where Adj: AdjacentIterator, ShareAdj: AdjacentIterator, P: Iterator<Item = (isize, isize)> + Clone
@@ -514,6 +589,9 @@ where Codes: codesets::Set<Item = (isize, isize)>
         match ext_pos.next() {
             None => {
                 // if it's an invalid configuration, don't even bother looking at it
+                for p in lands.total_exterior.iter() {
+                    self.detectors.insert(*p);
+                }
                 if !self.is_valid_over::<Adj, _>(self.closed_interior.iter().chain(lands.field.iter()).copied()) {
                     return -Share::one(); // return -1 to denote nothing (no share here at all)
                 }
@@ -595,11 +673,11 @@ where Codes: codesets::Set<Item = (isize, isize)>
 
         // go through the average/discharge candidates and keep track of working share as we do averaging/discharging
         let mut working_share = center_share.clone();
-        'next_candidate: for (share, neighbor) in candidates {
+        'next_candidate: for (share, neighbor) in candidates.iter() {
             // look at each of my adjacent detectors and keep track of how many problems i'm next to
             let mut adj_problems = 0;
             let mut sum_weights = Share::zero(); // this is only updated if using weighted strategy
-            for other in Adj::Open::at(neighbor) {
+            for other in Adj::Open::at(*neighbor) {
                 if !self.detectors.contains(&other) {
                     continue;
                 }
@@ -644,7 +722,34 @@ where Codes: codesets::Set<Item = (isize, isize)>
                 return working_share;
             }
         }
-        // otherwise we failed to correct - return the best we could do
+        // otherwise we failed to correct - discharge still has some hope
+        match self.strategy {
+            TheoStrategy::Trivial => panic!("we shouldn't be here"),
+            TheoStrategy::Avg => (), // this can't do anything better
+            TheoStrategy::DisWeightExcess | TheoStrategy::DisWeightShare => (), // these aren't supported for batch discharge source logic yet - probably never will be
+            TheoStrategy::Dis => {
+                let mut new_working_share = center_share.clone(); // get a new working share
+
+                // go through the candidates again
+                for (share, neighbor) in candidates.iter() {
+                    let simultaneous_adj_problems = self.max_simultaneous_problem_neighbors::<Adj, ShareAdj>(*neighbor);
+                    assert!(simultaneous_adj_problems > 0); // sanity check
+
+                    let dis = (self.thresh - share) / Share::from_integer(simultaneous_adj_problems.into());
+                    assert_gt!(dis, Share::zero()); // sanity check
+
+                    new_working_share -= dis;
+                    if &new_working_share <= self.thresh {
+                        return new_working_share;
+                    }
+                }
+
+                // at the end we should at least do as well as the non-simultaneous expansion
+                assert_le!(new_working_share, working_share);
+                working_share = new_working_share; // replace with the better value
+            }
+        }
+        // but if that also failed, just return the best we could do
         working_share
     }
     #[must_use]
