@@ -478,6 +478,38 @@ where T: Ord + Default + Clone + Debug
 }
 
 #[derive(Default, Clone, Debug, PartialEq)]
+pub struct RSP<T> {
+    codes: Vec<Vec<T>>,
+}
+impl<T> Set for RSP<T>
+where T: Ord + Default + Clone + Debug
+{
+    type Item = T;
+    type LocatingCode = RegularLOC<T>;
+
+    fn clear(&mut self) {
+        self.codes.clear();
+    }
+    fn can_add(&self, loc: &Self::LocatingCode) -> bool {
+        if loc.code.len() < 3 { return false; }
+        for other in &self.codes {
+            let equal = util::count_equal(other, &loc.code);
+            if other.len() + loc.code.len() - 2 * equal < 2 {
+                return false;
+            }
+        }
+        true
+    }
+    fn add(&mut self, loc: Self::LocatingCode) -> bool {
+        if self.can_add(&loc) {
+            self.codes.push(loc.code);
+            true
+        }
+        else { false }
+    }
+}
+
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct ERR<T> {
     codes: Vec<Vec<T>>,
 }

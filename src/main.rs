@@ -1178,8 +1178,8 @@ enum Parameter {
     DOM, ODOM,
     EDOM, EODOM,
     LD, REDLD, DETLD, ERRLD,
-    IC, REDIC, DETIC, ERRIC,
-    OLD, REDOLD, DETOLD, ERROLD,
+    IC, REDIC, DETIC, RSPIC, ERRIC,
+    OLD, REDOLD, DETOLD, RSPOLD, ERROLD,
 }
 impl FromStr for Parameter {
     type Err = ();
@@ -1196,10 +1196,12 @@ impl FromStr for Parameter {
             "ic" => Parameter::IC,
             "red:ic" | "redic" => Parameter::REDIC,
             "det:ic" | "detic" => Parameter::DETIC,
+            "rsp:ic" | "rspic" => Parameter::RSPIC,
             "err:ic" | "erric" => Parameter::ERRIC,
             "old" => Parameter::OLD,
             "red:old" | "redold" => Parameter::REDOLD,
             "det:old" | "detold" => Parameter::DETOLD,
+            "rsp:old" | "rspold" => Parameter::RSPOLD,
             "err:old" | "errold" => Parameter::ERROLD,
 
             _ => return Err(()),
@@ -1251,10 +1253,12 @@ fn tess_helper_calc<T: Tessellation>(tess: &mut T, param: Parameter, graph: Grap
                 Parameter::IC => calc_thresh!(OLD, $closed),
                 Parameter::REDIC => calc_thresh!(RED, $closed),
                 Parameter::DETIC => calc_thresh!(DET, $closed),
+                Parameter::RSPIC => calc_thresh!(RSP, $closed),
                 Parameter::ERRIC => calc_thresh!(ERR, $closed),
                 Parameter::OLD => calc_thresh!(OLD, $open),
                 Parameter::REDOLD => calc_thresh!(RED, $open),
                 Parameter::DETOLD => calc_thresh!(DET, $open),
+                Parameter::RSPOLD => calc_thresh!(RSP, $open),
                 Parameter::ERROLD => calc_thresh!(ERR, $open),
             }
         }
@@ -1384,10 +1388,12 @@ fn theo_helper(param: &str, graph: &str, thresh: &str, strategy: TheoStrategy, m
                 Parameter::IC => calc!(OLD, $closed, $closed),
                 Parameter::REDIC => calc!(RED, $closed, $closed),
                 Parameter::DETIC => calc!(DET, $closed, $closed),
+                Parameter::RSPIC => calc!(RSP, $closed, $closed),
                 Parameter::ERRIC => calc!(ERR, $closed, $closed),
                 Parameter::OLD => calc!(OLD, $open, $open),
                 Parameter::REDOLD => calc!(RED, $open, $open),
                 Parameter::DETOLD => calc!(DET, $open, $open),
+                Parameter::RSPOLD => calc!(RSP, $open, $open),
                 Parameter::ERROLD => calc!(ERR, $open, $open),
             }
         }
