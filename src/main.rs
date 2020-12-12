@@ -1427,25 +1427,19 @@ fn auto_theo_helper(set: &str, graph: &str, strategy: TheoStrategy) {
         }
     }
 }
-fn finite_helper(graph_path: &str, set: &str, count: &str) {
+fn finite_helper(graph_path: &str, param: &str, count: &str) {
+    let param: Parameter = param.parse().unwrap_or_else(|_| crash!(2, "unknown parameter: {}", param));
     let mut g = match FiniteGraph::with_shape(graph_path) {
         Ok(g) => g,
-        Err(e) => {
-            match e {
-                GraphLoadError::FileOpenFailure => eprintln!("failed to open graph file {}", graph_path),
-                GraphLoadError::InvalidFormat(msg) => eprintln!("file {} was invalid format: {}", graph_path, msg),
-            }
-            crash!(2);
+        Err(e) => match e {
+            GraphLoadError::FileOpenFailure => crash!(2, "failed to open graph file {}", graph_path),
+            GraphLoadError::InvalidFormat(msg) => crash!(2, "file {} was invalid format: {}", graph_path, msg),
         }
     };
     let count = match count.parse::<usize>() {
         Ok(n) => {
-            if n == 0 {
-                crash!(2, "count cannot be zero");
-            }
-            if n > g.verts.len() {
-                crash!(2, "count cannot be larger than graph size");
-            }
+            if n == 0 { crash!(2, "count cannot be zero"); }
+            if n > g.verts.len() { crash!(2, "count cannot be larger than graph size"); }
             n
         }
         Err(_) => crash!(2, "failed to parse '{}' as positive integer", count),
@@ -1457,25 +1451,25 @@ fn finite_helper(graph_path: &str, set: &str, count: &str) {
         }
     }
 
-    let success = match set {
-        "dom" => calc!(DOM, Closed),
-        "odom" => calc!(DOM, Open),
-        "edom" => calc!(EDOM, Closed),
-        "eodom" => calc!(EDOM, Open),
-        "ld" => calc!(LD, Open),
-        "red:ld" => calc!(REDLD, Open),
-        "det:ld" => calc!(DETLD, Open),
-        "err:ld" => calc!(ERRLD, Open),
-        "ic" => calc!(OLD, Closed),
-        "red:ic" => calc!(RED, Closed),
-        "det:ic" => calc!(DET, Closed),
-        "err:ic" => calc!(ERR, Closed),
-        "old" => calc!(OLD, Open),
-        "red:old" => calc!(RED, Open),
-        "det:old" => calc!(DET, Open),
-        "err:old" => calc!(ERR, Open),
-
-        _ => crash!(2, "unknown set: {}", set),
+    let success = match param {
+        Parameter::DOM => calc!(DOM, Closed),
+        Parameter::ODOM => calc!(DOM, Open),
+        Parameter::EDOM => calc!(EDOM, Closed),
+        Parameter::EODOM => calc!(EDOM, Open),
+        Parameter::LD => calc!(LD, Open),
+        Parameter::REDLD => calc!(REDLD, Open),
+        Parameter::DETLD => calc!(DETLD, Open),
+        Parameter::ERRLD => calc!(ERRLD, Open),
+        Parameter::IC => calc!(OLD, Closed),
+        Parameter::REDIC => calc!(RED, Closed),
+        Parameter::DETIC => calc!(DET, Closed),
+        Parameter::RSPIC => calc!(RSP, Closed),
+        Parameter::ERRIC => calc!(ERR, Closed),
+        Parameter::OLD => calc!(OLD, Open),
+        Parameter::REDOLD => calc!(RED, Open),
+        Parameter::DETOLD => calc!(DET, Open),
+        Parameter::RSPOLD => calc!(RSP, Open),
+        Parameter::ERROLD => calc!(ERR, Open),
     };
     if success {
         println!("found solution:\n{:?}", g.get_solution());
@@ -1484,6 +1478,75 @@ fn finite_helper(graph_path: &str, set: &str, count: &str) {
         println!("no solution found");
     }
 }
+fn smallest_helper(param: &str) -> usize {
+    let param: Parameter = param.parse().unwrap_or_else(|_| crash!(2, "unknown parameter: {}", param));
+    fn test(param: Parameter, mut graph: FiniteGraph, edges: Vec<&Vec<usize>>) -> bool {
+        let vertex_count = graph.verts.len();
+        macro_rules! calc {
+            ($t:ident, $m:ident) => {
+                graph.solver::<codesets::$t<usize>>().find_solution(vertex_count, AdjType::$m)
+            }
+        }
+        let success = match param {
+            Parameter::DOM => calc!(DOM, Closed),
+            Parameter::ODOM => calc!(DOM, Open),
+            Parameter::EDOM => unimplemented!(),
+            Parameter::EODOM => unimplemented!(),
+            Parameter::LD => calc!(LD, Open),
+            Parameter::REDLD => calc!(REDLD, Open),
+            Parameter::DETLD => calc!(DETLD, Open),
+            Parameter::ERRLD => calc!(ERRLD, Open),
+            Parameter::IC => calc!(OLD, Closed),
+            Parameter::REDIC => calc!(RED, Closed),
+            Parameter::DETIC => calc!(DET, Closed),
+            Parameter::RSPIC => calc!(RSP, Closed),
+            Parameter::ERRIC => calc!(ERR, Closed),
+            Parameter::OLD => calc!(OLD, Open),
+            Parameter::REDOLD => calc!(RED, Open),
+            Parameter::DETOLD => calc!(DET, Open),
+            Parameter::RSPOLD => calc!(RSP, Open),
+            Parameter::ERROLD => calc!(ERR, Open),
+        };
+        if success {
+            println!("found {} vertex solution with edges:\n{:?}", vertex_count, edges);
+        }
+        success
+    }
+    // we have to handle 1 vertex graph separately because following logic does combinations(2), which for a singleton graph is nothing
+    let singleton_graph = FiniteGraph { verts: vec![Vertex { label: 0.to_string(), open_adj: vec![], closed_adj: vec![0] }], detectors: Default::default() };
+    if test(param, singleton_graph, vec![]) { return 1; }
+    for vertex_count in 2.. {
+        let complete_edges: Vec<Vec<usize>> = (0..vertex_count).combinations(2).collect();
+        for edge_count in 0..=complete_edges.len() {
+            for edges in complete_edges.iter().combinations(edge_count) {
+                let mut vert_adjs = Vec::with_capacity(vertex_count);
+                for _ in 0..vertex_count {
+                    vert_adjs.push(Vec::with_capacity(vertex_count));
+                }
+                for edge in edges.iter() {
+                    let (a, b) = (edge[0], edge[1]);
+                    debug_assert_ne!(a, b); // sanity check
+                    vert_adjs[a].push(b);
+                    vert_adjs[b].push(a);
+                }
+                let verts = vert_adjs.into_iter().enumerate().map(|(i, mut adj)| {
+                    let open_adj = adj.clone();
+                    adj.push(i);
+                    Vertex { label: i.to_string(), open_adj, closed_adj: adj }
+                }).collect();
+                let graph = FiniteGraph { verts, detectors: Default::default() };
+                if test(param, graph, edges) { return vertex_count; }
+            }
+        }
+    }
+    panic!();
+}
+#[test]
+fn test_smallest() {
+    debug_assert_eq!(smallest_helper("dom"), 1);
+    debug_assert_eq!(smallest_helper("odom"), 2);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -1510,6 +1573,12 @@ fn main() {
                 crash!(1, "usage: {} finite [graph-file] [set-type] [set-size]", args[0]);
             }
             finite_helper(&args[2], &args[3], &args[4]);
+        }
+        Some("smallest") => {
+            if args.len() != 3 {
+                crash!(1, "usage: {} smallest [set-type]", args[0]);
+            }
+            smallest_helper(&args[2]);
         }
         Some("auto-theo") => {
             if args.len() != 4 {
