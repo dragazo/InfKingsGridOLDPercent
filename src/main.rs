@@ -1136,6 +1136,47 @@ impl FiniteGraph {
         v.sort();
         v
     }
+
+    fn geometric<T: fmt::Debug, F: Fn(&T, &T) -> bool>(points: &[T], f: &F) -> Self {
+        let mut verts = Vec::with_capacity(points.len());
+        for (i, a) in points.iter().enumerate() {
+            let mut adj = vec![];
+            for (j, b) in points[..i].iter().enumerate() {
+                if f(a, b) { adj.push(j); }
+            }
+            for (j, b) in points[i + 1..].iter().enumerate() {
+                if f(a, b) { adj.push(i + 1 + j); }
+            }
+            let open_adj = adj.clone();
+            adj.push(i);
+            verts.push(Vertex { open_adj, closed_adj: adj, label: format!("{:?}", a) });
+        }
+        Self { verts, detectors: Default::default() }
+    }
+    fn path(size: usize) -> Self {
+        let mut vert_pos = Vec::with_capacity(size);
+        for i in 0..size as isize { vert_pos.push(i); }
+        Self::geometric(&vert_pos, &|a, b| (a - b).abs() <= 1)
+    }
+    fn cycle(size: usize) -> Self {
+        let mut g = Self::path(size);
+        g.verts[0].open_adj.push(size - 1);
+        g.verts[0].closed_adj.push(size - 1);
+        g.verts[size - 1].open_adj.push(0);
+        g.verts[size - 1].closed_adj.push(0);
+        g
+    }
+    fn ladder(length: usize) -> Self {
+        let mut vert_pos = Vec::with_capacity(length * 2);
+        for i in 0..length as isize { vert_pos.push((0isize, i)); }
+        for i in 0..length as isize { vert_pos.push((1isize, i)); }
+        Self::geometric(&vert_pos, &|a, b| (a.0 - b.0).abs() + (a.1 - b.1).abs() <= 1)
+    }
+    fn complete(size: usize) -> Self {
+        let mut vert_pos = Vec::with_capacity(size);
+        for i in 0..size as isize { vert_pos.push(i); }
+        Self::geometric(&vert_pos, &|_, _| true)
+    }
 }
 
 fn parse_thresh(v: &str) -> f64 {
@@ -1427,15 +1468,8 @@ fn auto_theo_helper(set: &str, graph: &str, strategy: TheoStrategy) {
         }
     }
 }
-fn finite_helper(graph_path: &str, param: &str, count: &str) {
+fn finite_helper(mut g: FiniteGraph, param: &str, count: &str) {
     let param: Parameter = param.parse().unwrap_or_else(|_| crash!(2, "unknown parameter: {}", param));
-    let mut g = match FiniteGraph::with_shape(graph_path) {
-        Ok(g) => g,
-        Err(e) => match e {
-            GraphLoadError::FileOpenFailure => crash!(2, "failed to open graph file {}", graph_path),
-            GraphLoadError::InvalidFormat(msg) => crash!(2, "file {} was invalid format: {}", graph_path, msg),
-        }
-    };
     let count = match count.parse::<usize>() {
         Ok(n) => {
             if n == 0 { crash!(2, "count cannot be zero"); }
@@ -1547,6 +1581,13 @@ fn test_smallest() {
     debug_assert_eq!(smallest_helper("odom"), 2);
 }
 
+fn parse_positive(v: &str) -> usize {
+    match v.parse::<usize>() {
+        Ok(v) if v > 0 => v,
+        _ => crash!(2, "failed to parse '{}' as positive integer", v),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -1572,7 +1613,43 @@ fn main() {
             if args.len() != 5 {
                 crash!(1, "usage: {} finite [graph-file] [set-type] [set-size]", args[0]);
             }
-            finite_helper(&args[2], &args[3], &args[4]);
+            let graph_path = &args[2];
+            let g = match FiniteGraph::with_shape(graph_path) {
+                Ok(g) => g,
+                Err(e) => match e {
+                    GraphLoadError::FileOpenFailure => crash!(2, "failed to open graph file {}", graph_path),
+                    GraphLoadError::InvalidFormat(msg) => crash!(2, "file {} was invalid format: {}", graph_path, msg),
+                }
+            };
+            finite_helper(g, &args[3], &args[4]);
+        }
+        Some("finite-path") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} finite-path [size] [set-type] [set-size]", args[0]);
+            }
+            let size = parse_positive(&args[2]);
+            finite_helper(FiniteGraph::path(size), &args[3], &args[4]);
+        }
+        Some("finite-cycle") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} finite-cycle [size] [set-type] [set-size]", args[0]);
+            }
+            let size = parse_positive(&args[2]);
+            finite_helper(FiniteGraph::cycle(size), &args[3], &args[4]);
+        }
+        Some("finite-ladder") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} finite-ladder [length] [set-type] [set-size]", args[0]);
+            }
+            let length = parse_positive(&args[2]);
+            finite_helper(FiniteGraph::ladder(length), &args[3], &args[4]);
+        }
+        Some("finite-complete") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} finite-complete [size] [set-type] [set-size]", args[0]);
+            }
+            let size = parse_positive(&args[2]);
+            finite_helper(FiniteGraph::complete(size), &args[3], &args[4]);
         }
         Some("smallest") => {
             if args.len() != 3 {
