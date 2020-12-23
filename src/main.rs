@@ -1159,18 +1159,45 @@ impl FiniteGraph {
         Self::geometric(&vert_pos, &|a, b| (a - b).abs() <= 1)
     }
     fn cycle(size: usize) -> Self {
-        let mut g = Self::path(size);
-        g.verts[0].open_adj.push(size - 1);
-        g.verts[0].closed_adj.push(size - 1);
-        g.verts[size - 1].open_adj.push(0);
-        g.verts[size - 1].closed_adj.push(0);
-        g
+        let mut vert_pos = Vec::with_capacity(size);
+        let size = size as isize;
+        for i in 0..size { vert_pos.push(i); }
+        Self::geometric(&vert_pos, &|&a, &b| (a - b).abs() <= 1 || (a == 0 && b == size - 1) || (a == size - 1 && b == 0))
     }
-    fn ladder(length: usize) -> Self {
-        let mut vert_pos = Vec::with_capacity(length * 2);
-        for i in 0..length as isize { vert_pos.push((0isize, i)); }
-        for i in 0..length as isize { vert_pos.push((1isize, i)); }
+    fn grid(rows: usize, cols: usize) -> Self {
+        let mut vert_pos = Vec::with_capacity(rows * cols);
+        for row in 0..rows as isize {
+            for col in 0..cols as isize {
+                vert_pos.push((row, col));
+            }
+        }
         Self::geometric(&vert_pos, &|a, b| (a.0 - b.0).abs() + (a.1 - b.1).abs() <= 1)
+    }
+    fn cylinder(circum: usize, length: usize) -> Self {
+        let mut vert_pos = Vec::with_capacity(circum * length);
+        let circum = circum as isize;
+        let length = length as isize;
+        for row in 0..circum {
+            for col in 0..length {
+                vert_pos.push((row, col));
+            }
+        }
+        Self::geometric(&vert_pos, &|a, b| (a.0 - b.0).abs() + (a.1 - b.1).abs() <= 1 || (a.1 == b.1 && ((a.0 == 0 && b.0 == circum - 1) || (a.0 == circum - 1 && b.0 == 0))))
+    }
+    fn torus(circum: usize, length: usize) -> Self {
+        let mut vert_pos = Vec::with_capacity(circum * length);
+        let circum = circum as isize;
+        let length = length as isize;
+        for row in 0..circum {
+            for col in 0..length {
+                vert_pos.push((row, col));
+            }
+        }
+        Self::geometric(&vert_pos, &|a, b|
+            (a.0 - b.0).abs() + (a.1 - b.1).abs() <= 1
+            || (a.1 == b.1 && ((a.0 == 0 && b.0 == circum - 1) || (a.0 == circum - 1 && b.0 == 0)))
+            || (a.0 == b.0 && ((a.1 == 0 && b.1 == length - 1) || (a.1 == length - 1 && b.1 == 0)))
+        )
     }
     fn complete(size: usize) -> Self {
         let mut vert_pos = Vec::with_capacity(size);
@@ -1637,12 +1664,29 @@ fn main() {
             let size = parse_positive(&args[2]);
             finite_helper(FiniteGraph::cycle(size), &args[3], &args[4]);
         }
-        Some("finite-ladder") => {
-            if args.len() != 5 {
-                crash!(1, "usage: {} finite-ladder [length] [set-type] [set-size]", args[0]);
+        Some("finite-grid") => {
+            if args.len() != 6 {
+                crash!(1, "usage: {} finite-grid [rows] [cols] [set-type] [set-size]", args[0]);
             }
-            let length = parse_positive(&args[2]);
-            finite_helper(FiniteGraph::ladder(length), &args[3], &args[4]);
+            let rows = parse_positive(&args[2]);
+            let cols = parse_positive(&args[3]);
+            finite_helper(FiniteGraph::grid(rows, cols), &args[4], &args[5]);
+        }
+        Some("finite-cylinder") => {
+            if args.len() != 6 {
+                crash!(1, "usage: {} finite-cylinder [circum] [length] [set-type] [set-size]", args[0]);
+            }
+            let circum = parse_positive(&args[2]);
+            let length = parse_positive(&args[3]);
+            finite_helper(FiniteGraph::cylinder(circum, length), &args[4], &args[5]);
+        }
+        Some("finite-torus") => {
+            if args.len() != 6 {
+                crash!(1, "usage: {} finite-torus [circum] [length] [set-type] [set-size]", args[0]);
+            }
+            let circum = parse_positive(&args[2]);
+            let length = parse_positive(&args[3]);
+            finite_helper(FiniteGraph::torus(circum, length), &args[4], &args[5]);
         }
         Some("finite-complete") => {
             if args.len() != 5 {
