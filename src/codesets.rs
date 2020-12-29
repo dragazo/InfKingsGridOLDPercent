@@ -38,6 +38,26 @@ where T: Clone + Debug + PartialEq
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct RegularLOCWithState<T>
+where T: Clone + Debug + PartialEq
+{
+    code: Vec<T>,
+    is_detector: bool,
+}
+impl<T> LOC for RegularLOCWithState<T>
+where T: Clone + Debug + PartialEq
+{
+    type Item = T;
+
+    fn dom(&self) -> usize {
+        self.code.len()
+    }
+    fn new(_: T, is_detector: bool, code: Vec<T>) -> Self {
+        Self { code, is_detector }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct LDLOC<T>
 where T: Clone + Debug + PartialEq
 {
@@ -385,6 +405,34 @@ where T: Ord + Default + Clone + Debug
         else {
             false
         }
+    }
+}
+
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct OIOLD<T>
+where T: Ord
+{
+    codes: BTreeSet<Vec<T>>,
+}
+impl<T> Set for OIOLD<T>
+where T: Ord + Default + Clone + Debug
+{
+    type Item = T;
+    type LocatingCode = RegularLOCWithState<T>;
+
+    fn clear(&mut self) {
+        self.codes.clear();
+    }
+    fn can_add(&self, loc: &Self::LocatingCode) -> bool {
+        if loc.is_detector && loc.code.len() != 1 { return false; }
+        !loc.code.is_empty() && !self.codes.contains(&loc.code)
+    }
+    fn add(&mut self, loc: Self::LocatingCode) -> bool {
+        if self.can_add(&loc) {
+            self.codes.insert(loc.code);
+            true
+        }
+        else { false }
     }
 }
 

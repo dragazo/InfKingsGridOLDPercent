@@ -1164,7 +1164,7 @@ impl FiniteGraph {
         for i in 0..size { vert_pos.push(i); }
         Self::geometric(&vert_pos, &|&a, &b| (a - b).abs() <= 1 || (a == 0 && b == size - 1) || (a == size - 1 && b == 0))
     }
-    fn grid(rows: usize, cols: usize) -> Self {
+    fn square_grid(rows: usize, cols: usize) -> Self {
         let mut vert_pos = Vec::with_capacity(rows * cols);
         for row in 0..rows as isize {
             for col in 0..cols as isize {
@@ -1172,6 +1172,15 @@ impl FiniteGraph {
             }
         }
         Self::geometric(&vert_pos, &|a, b| (a.0 - b.0).abs() + (a.1 - b.1).abs() <= 1)
+    }
+    fn king_grid(rows: usize, cols: usize) -> Self {
+        let mut vert_pos = Vec::with_capacity(rows * cols);
+        for row in 0..rows as isize {
+            for col in 0..cols as isize {
+                vert_pos.push((row, col));
+            }
+        }
+        Self::geometric(&vert_pos, &|a, b| (a.0 - b.0).abs() <= 1 && (a.1 - b.1).abs() <= 1)
     }
     fn cylinder(circum: usize, length: usize) -> Self {
         let mut vert_pos = Vec::with_capacity(circum * length);
@@ -1248,6 +1257,7 @@ enum Parameter {
     LD, REDLD, DETLD, ERRLD,
     IC, REDIC, DETIC, RSPIC, ERRIC,
     OLD, REDOLD, DETOLD, RSPOLD, ERROLD,
+    OIOLD,
 }
 impl FromStr for Parameter {
     type Err = ();
@@ -1271,6 +1281,7 @@ impl FromStr for Parameter {
             "det:old" | "detold" => Parameter::DETOLD,
             "rsp:old" | "rspold" => Parameter::RSPOLD,
             "err:old" | "errold" => Parameter::ERROLD,
+            "oiold" | "oindold" | "oldoind" => Parameter::OIOLD,
 
             _ => return Err(()),
         })
@@ -1328,6 +1339,7 @@ fn tess_helper_calc<T: Tessellation>(tess: &mut T, param: Parameter, graph: Grap
                 Parameter::DETOLD => calc_thresh!(DET, $open),
                 Parameter::RSPOLD => calc_thresh!(RSP, $open),
                 Parameter::ERROLD => calc_thresh!(ERR, $open),
+                Parameter::OIOLD => calc_exactly!(OIOLD, $open),
             }
         }
     }
@@ -1448,7 +1460,7 @@ fn theo_helper(param: &str, graph: &str, thresh: &str, strategy: TheoStrategy, m
             match param {
                 Parameter::DOM => calc!(DOM, $closed, $closed),
                 Parameter::ODOM => calc!(DOM, $open, $open),
-                Parameter::EDOM | Parameter::EODOM => crash!(2, "lower bound does not currently support {:?}", param), 
+                Parameter::EDOM | Parameter::EODOM | Parameter::OIOLD => crash!(2, "lower bound does not currently support {:?}", param), 
                 Parameter::LD => calc!(LD, $open, $closed),       // important: this one uses open adj for loc codes but closed adj for share
                 Parameter::REDLD => calc!(REDLD, $open, $closed), // important: this one uses open adj for loc codes but closed adj for share
                 Parameter::DETLD => calc!(DETLD, $open, $closed), // important: this one uses open adj for loc codes but closed adj for share
@@ -1531,6 +1543,7 @@ fn finite_helper(mut g: FiniteGraph, param: &str, count: &str) {
         Parameter::DETOLD => calc!(DET, Open),
         Parameter::RSPOLD => calc!(RSP, Open),
         Parameter::ERROLD => calc!(ERR, Open),
+        Parameter::OIOLD => calc!(OIOLD, Open),
     };
     if success {
         println!("found solution:\n{:?}", g.get_solution());
@@ -1567,6 +1580,7 @@ fn smallest_helper(param: &str) -> usize {
             Parameter::DETOLD => calc!(DET, Open),
             Parameter::RSPOLD => calc!(RSP, Open),
             Parameter::ERROLD => calc!(ERR, Open),
+            Parameter::OIOLD => unimplemented!(),
         };
         if success {
             println!("found {} vertex solution with edges:\n{:?}", vertex_count, edges);
@@ -1664,13 +1678,21 @@ fn main() {
             let size = parse_positive(&args[2]);
             finite_helper(FiniteGraph::cycle(size), &args[3], &args[4]);
         }
-        Some("finite-grid") => {
+        Some("finite-sq") => {
             if args.len() != 6 {
-                crash!(1, "usage: {} finite-grid [rows] [cols] [set-type] [set-size]", args[0]);
+                crash!(1, "usage: {} finite-sq [rows] [cols] [set-type] [set-size]", args[0]);
             }
             let rows = parse_positive(&args[2]);
             let cols = parse_positive(&args[3]);
-            finite_helper(FiniteGraph::grid(rows, cols), &args[4], &args[5]);
+            finite_helper(FiniteGraph::square_grid(rows, cols), &args[4], &args[5]);
+        }
+        Some("finite-king") => {
+            if args.len() != 6 {
+                crash!(1, "usage: {} finite-king [rows] [cols] [set-type] [set-size]", args[0]);
+            }
+            let rows = parse_positive(&args[2]);
+            let cols = parse_positive(&args[3]);
+            finite_helper(FiniteGraph::king_grid(rows, cols), &args[4], &args[5]);
         }
         Some("finite-cylinder") => {
             if args.len() != 6 {
