@@ -1552,13 +1552,15 @@ fn finite_helper(mut g: FiniteGraph, param: &str, count: &str) {
         println!("no solution found");
     }
 }
-fn smallest_helper(param: &str) -> usize {
+fn smallest_helper(param: &str, goal: &str) -> usize {
+    let goal = Goal::MeetOrBeat(parse_thresh(goal));
     let param: Parameter = param.parse().unwrap_or_else(|_| crash!(2, "unknown parameter: {}", param));
-    fn test(param: Parameter, mut graph: FiniteGraph, edges: Vec<&Vec<usize>>) -> bool {
+    fn test(param: Parameter, mut graph: FiniteGraph, edges: Vec<&Vec<usize>>, goal: &Goal) -> bool {
         let vertex_count = graph.verts.len();
+        let goal_vertices = goal.get_value(vertex_count);
         macro_rules! calc {
             ($t:ident, $m:ident) => {
-                graph.solver::<codesets::$t<usize>>().find_solution(vertex_count, AdjType::$m)
+                graph.solver::<codesets::$t<usize>>().find_solution(goal_vertices, AdjType::$m)
             }
         }
         let success = match param {
@@ -1589,7 +1591,7 @@ fn smallest_helper(param: &str) -> usize {
     }
     // we have to handle 1 vertex graph separately because following logic does combinations(2), which for a singleton graph is nothing
     let singleton_graph = FiniteGraph { verts: vec![Vertex { label: 0.to_string(), open_adj: vec![], closed_adj: vec![0] }], detectors: Default::default() };
-    if test(param, singleton_graph, vec![]) { return 1; }
+    if test(param, singleton_graph, vec![], &goal) { return 1; }
     for vertex_count in 2.. {
         let complete_edges: Vec<Vec<usize>> = (0..vertex_count).combinations(2).collect();
         for edge_count in 0..=complete_edges.len() {
@@ -1610,7 +1612,7 @@ fn smallest_helper(param: &str) -> usize {
                     Vertex { label: i.to_string(), open_adj, closed_adj: adj }
                 }).collect();
                 let graph = FiniteGraph { verts, detectors: Default::default() };
-                if test(param, graph, edges) { return vertex_count; }
+                if test(param, graph, edges, &goal) { return vertex_count; }
             }
         }
     }
@@ -1618,8 +1620,8 @@ fn smallest_helper(param: &str) -> usize {
 }
 #[test]
 fn test_smallest() {
-    debug_assert_eq!(smallest_helper("dom"), 1);
-    debug_assert_eq!(smallest_helper("odom"), 2);
+    debug_assert_eq!(smallest_helper("dom", "1"), 1);
+    debug_assert_eq!(smallest_helper("odom", "1"), 2);
 }
 
 fn parse_positive(v: &str) -> usize {
@@ -1718,10 +1720,10 @@ fn main() {
             finite_helper(FiniteGraph::complete(size), &args[3], &args[4]);
         }
         Some("smallest") => {
-            if args.len() != 3 {
-                crash!(1, "usage: {} smallest [set-type]", args[0]);
+            if args.len() != 4 {
+                crash!(1, "usage: {} smallest [set-type] [density]", args[0]);
             }
-            smallest_helper(&args[2]);
+            smallest_helper(&args[2], &args[3]);
         }
         Some("auto-theo") => {
             if args.len() != 4 {
