@@ -35,6 +35,9 @@ use adj::AdjacentIterator;
 use codesets::LOC;
 use perf::{PointMap, PointSet};
 
+#[cfg(test)]
+use util::is_sorted;
+
 enum Goal {
     MeetOrBeat(f64),
     Exactly(usize),
@@ -846,7 +849,7 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
         let mut s = PointSet::with_bounds(bounds.0, bounds.1);
         s.extend(iter);
         s
-    };
+    }
 
     let share_thresh = thresh.recip();
 
@@ -1037,6 +1040,7 @@ where Codes: codesets::Set<Item = usize>
     }
 }
 
+#[derive(Debug)]
 enum GraphLoadError {
     FileOpenFailure,
     InvalidFormat(&'static str),
@@ -1140,16 +1144,13 @@ impl FiniteGraph {
     fn geometric<T: fmt::Debug, F: Fn(&T, &T) -> bool>(points: &[T], f: &F) -> Self {
         let mut verts = Vec::with_capacity(points.len());
         for (i, a) in points.iter().enumerate() {
-            let mut adj = vec![];
-            for (j, b) in points[..i].iter().enumerate() {
-                if f(a, b) { adj.push(j); }
+            let mut open_adj = vec![];
+            let mut closed_adj = vec![];
+            for (j, b) in points.iter().enumerate() {
+                if j == i { closed_adj.push(j); }
+                else if f(a, b) { closed_adj.push(j); open_adj.push(j); }
             }
-            for (j, b) in points[i + 1..].iter().enumerate() {
-                if f(a, b) { adj.push(i + 1 + j); }
-            }
-            let open_adj = adj.clone();
-            adj.push(i);
-            verts.push(Vertex { open_adj, closed_adj: adj, label: format!("{:?}", a) });
+            verts.push(Vertex { open_adj, closed_adj, label: format!("{:?}", a) });
         }
         Self { verts, detectors: Default::default() }
     }
@@ -1837,8 +1838,25 @@ fn main() {
     };
 }
 
-#[test]
-fn test_theo_hex_works() {
+#[test] fn test_finite_sorted() {
+    fn assert_sorted(g: &FiniteGraph) {
+        for v in g.verts.iter() {
+            if !is_sorted(&v.open_adj) { panic!("{:?}", v.open_adj); }
+            if !is_sorted(&v.closed_adj) { panic!("{:?}", v.closed_adj); }
+        }
+    }
+    
+    assert_sorted(&FiniteGraph::complete(6));
+    assert_sorted(&FiniteGraph::cycle(6));
+    assert_sorted(&FiniteGraph::cylinder(6, 3));
+    assert_sorted(&FiniteGraph::king_grid(8, 4));
+    assert_sorted(&FiniteGraph::path(9));
+    assert_sorted(&FiniteGraph::square_grid(3, 4));
+    assert_sorted(&FiniteGraph::torus(4, 6));
+    assert_sorted(&FiniteGraph::with_shape("example-graphs/petersen.txt").unwrap());
+}
+
+#[test] fn test_theo_hex_works() {
     assert!(theo_helper("ld", "hex", "1/3", TheoStrategy::Dis, None));
     assert!(theo_helper("det:ld", "hex", "3/5", TheoStrategy::Dis, None));
     assert!(theo_helper("red:ic", "hex", "4/7", TheoStrategy::Dis, None));
@@ -1847,14 +1865,12 @@ fn test_theo_hex_works() {
     assert!(theo_helper("old", "hex", "1/2", TheoStrategy::Dis, None));
 }
 
-#[test]
-fn test_theo_tmb_works() {
+#[test] fn test_theo_tmb_works() {
     assert!(theo_helper("red:ic", "tmb", "4/9", TheoStrategy::Dis, None));
     assert!(theo_helper("det:ic", "tmb", "3/5", TheoStrategy::Dis, None));
     assert!(theo_helper("err:ic", "tmb", "12/19", TheoStrategy::Dis, None));
     assert!(theo_helper("det:ld", "tmb", "3/5", TheoStrategy::Dis, None));
 }
-#[test]
-fn test_theo_tmb_not_works() {
+#[test] fn test_theo_tmb_not_works() {
     assert!(!theo_helper("red:ic", "tmb", "0.44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444445", TheoStrategy::Dis, None));
 }

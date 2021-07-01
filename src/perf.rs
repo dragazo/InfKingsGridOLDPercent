@@ -85,6 +85,7 @@ impl<T> PointMap<T> {
         let (top, bottom, left, right) = (self.top, self.bottom, self.left, self.right);
         (top..=bottom).flat_map(move |r| (left..=right).map(move |c| (r, c))).zip(self.data.iter()).filter_map(|(k, v)| Some((k, v.as_ref()?)))
     }
+    #[cfg(test)]
     pub fn iter_mut(&mut self) -> impl Iterator<Item = ((isize, isize), &mut T)> {
         let (top, bottom, left, right) = (self.top, self.bottom, self.left, self.right);
         (top..=bottom).flat_map(move |r| (left..=right).map(move |c| (r, c))).zip(self.data.iter_mut()).filter_map(|(k, v)| Some((k, v.as_mut()?)))
