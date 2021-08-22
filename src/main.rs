@@ -1214,6 +1214,12 @@ impl FiniteGraph {
         for i in 0..size as isize { vert_pos.push(i); }
         Self::geometric(&vert_pos, &|_, _| true)
     }
+    fn hypercube(dim: usize) -> Self {
+        assert!(dim <= 30); // anything this big is unrealistic anyway
+        assert!(!0usize.is_power_of_two());
+        let verts: Vec<usize> = (0..(1 << dim)).collect();
+        Self::geometric(&verts, &|&a, &b| (a ^ b).is_power_of_two())
+    }
 }
 
 fn parse_thresh(v: &str) -> f64 {
@@ -1719,6 +1725,13 @@ fn main() {
             }
             let size = parse_positive(&args[2]);
             finite_helper(FiniteGraph::complete(size), &args[3], &args[4]);
+        }
+        Some("finite-hypercube") => {
+            if args.len() != 5 {
+                crash!(1, "usage: {} finite-hypercube [dim] [set-type] [set-size]", args[0]);
+            }
+            let dim = parse_positive(&args[2]);
+            finite_helper(FiniteGraph::hypercube(dim), &args[3], &args[4]);
         }
         Some("smallest") => {
             if args.len() != 4 {
