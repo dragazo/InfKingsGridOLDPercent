@@ -975,12 +975,12 @@ where Codes: codesets::Set<Item = (isize, isize)> + 'static, Adj: AdjacentIterat
     problems.is_empty()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum AdjType {
     Open, Closed
 }
 
-struct FiniteGraphSolver<'a, Codes> {
+struct FiniteGraphSolver<'a, Codes: Send> {
     verts: &'a [Vertex],
     detectors: &'a mut HashSet<usize>,
     needed: usize,
@@ -988,7 +988,7 @@ struct FiniteGraphSolver<'a, Codes> {
     adj_type: AdjType,
 }
 impl<Codes> FiniteGraphSolver<'_, Codes>
-where Codes: codesets::Set<Item = usize>
+where Codes: codesets::Set<Item = usize> + Send + 'static
 {
     fn get_raw_locating_code(&self, p: usize) -> Vec<usize> {
         let mut v = Vec::with_capacity(9);
@@ -1038,6 +1038,72 @@ where Codes: codesets::Set<Item = usize>
         self.adj_type = adj_type;
         self.find_solution_recursive(0)
     }
+    fn find_solution_parallel(&mut self, n: usize, adj_type: AdjType, threads: usize) -> bool {
+        assert!(threads > 0);
+        if threads == 1 {
+            return self.find_solution(n, adj_type);
+        }
+
+        self.detectors.clear();
+        self.needed = n;
+        self.adj_type = adj_type;
+        self.codes.clear(); // for faster clone later
+
+        let combos = (0..self.verts.len()).combinations(n).fuse(); // fuse needed for multi end iter
+        let soln: Option<HashSet<usize>> = None;
+        let combos = Arc::new(Mutex::new((combos, soln))); // combos and found solution
+        let mut ts: Vec<thread::JoinHandle<()>> = Vec::with_capacity(threads);
+        for _ in 0..threads {
+            let verts = self.verts.to_vec();
+            let needed = self.needed;
+            let codes = self.codes.clone();
+            let adj_type = self.adj_type;
+
+            let combos = combos.clone();
+
+            ts.push(thread::spawn(move || {
+                let mut detectors = HashSet::with_capacity(n);
+                let mut solver = FiniteGraphSolver {
+                    verts: &verts,
+                    detectors: &mut detectors,
+                    needed,
+                    codes,
+                    adj_type,
+                };
+                loop {
+                    let next = {
+                        let mut combos = combos.lock().unwrap();
+                        if combos.1.is_some() { return }
+                        combos.0.next()
+                    };
+                    let next = match next {
+                        Some(next) => next,
+                        None => return,
+                    };
+                    solver.detectors.clear();
+                    solver.detectors.extend(&next);
+                    if solver.is_old() {
+                        let mut combos = combos.lock().unwrap();
+                        if combos.1.is_some() { return }
+                        combos.1 = Some(detectors);
+                        return
+                    }
+                }
+            }));
+        }
+        for t in ts {
+            t.join().unwrap();
+        }
+
+        let combos = combos.lock().unwrap();
+        match combos.1.as_ref() {
+            Some(soln) => {
+                self.detectors.clone_from(soln);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1045,6 +1111,7 @@ enum GraphLoadError {
     FileOpenFailure,
     InvalidFormat(&'static str),
 }
+#[derive(Clone)]
 struct Vertex {
     label: String,
     open_adj: Vec<usize>,
@@ -1125,7 +1192,7 @@ impl FiniteGraph {
         })
     }
     fn solver<Codes>(&mut self) -> FiniteGraphSolver<'_, Codes>
-    where Codes: codesets::Set<Item = usize>
+    where Codes: codesets::Set<Item = usize> + Send
     {
         FiniteGraphSolver {
             verts: &self.verts,
@@ -1256,6 +1323,15 @@ fn parse_thresh_frac(v: &str) -> Share {
         }
     }
 }
+fn parse_thread_count(v: &str) -> usize {
+    let cpus = num_cpus::get();
+    match v.parse::<usize>() {
+        Ok(x) if x == 0 => crash!(2, "cannot use 0 threads"),
+        Ok(x) if x > cpus => crash!(2, "this system has only {} cores, but {} were requested", cpus, x),
+        Ok(x) => x,
+        Err(_) => crash!(2, "failed to parse '{}' as positive integer", v),
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 enum Parameter {
@@ -1382,13 +1458,7 @@ fn entropy_helper(big_geo: Geometry, entropy_size: &str, param: &str, graph: &st
         Ok(v) => crash!(2, "entropy size cannot exceed size of geometry (geo size {}, entropy size {})", big_geo.size(), v),
         Err(_) => crash!(2, "failed to parse '{}' as positive integer", entropy_size),
     };
-    let cpus = num_cpus::get();
-    let threadc = match threadc.parse::<usize>() {
-        Ok(x) if x == 0 => crash!(2, "cannot use 0 threads"),
-        Ok(x) if x > cpus => crash!(2, "this system has only {} cores, but {} were requested", cpus, x),
-        Ok(x) => x,
-        Err(_) => crash!(2, "failed to parse '{}' as positive integer", threadc),
-    };
+    let threadc = parse_thread_count(threadc);
 
     let geos = big_geo.sub_geometries(entropy_size);
     let done_geos: BTreeSet<_> = Default::default();
@@ -1514,7 +1584,7 @@ fn auto_theo_helper(set: &str, graph: &str, strategy: TheoStrategy) {
         }
     }
 }
-fn finite_helper(mut g: FiniteGraph, param: &str, count: &str) {
+fn finite_helper(mut g: FiniteGraph, param: &str, count: &str, threadc: &str) {
     let param: Parameter = param.parse().unwrap_or_else(|_| crash!(2, "unknown parameter: {}", param));
     let count = match count.parse::<usize>() {
         Ok(n) => {
@@ -1524,10 +1594,11 @@ fn finite_helper(mut g: FiniteGraph, param: &str, count: &str) {
         }
         Err(_) => crash!(2, "failed to parse '{}' as positive integer", count),
     };
+    let threadc = parse_thread_count(threadc);
 
     macro_rules! calc {
         ($t:ident, $m:ident) => {
-            g.solver::<codesets::$t<usize>>().find_solution(count, AdjType::$m)
+            g.solver::<codesets::$t<usize>>().find_solution_parallel(count, AdjType::$m, threadc)
         }
     }
 
@@ -1660,8 +1731,8 @@ fn main() {
 
     match args.get(1).map(String::as_str) {
         Some("finite") => {
-            if args.len() != 5 {
-                crash!(1, "usage: {} finite [graph-file] [set-type] [set-size]", args[0]);
+            if args.len() != 6 {
+                crash!(1, "usage: {} finite [graph-file] [set-type] [set-size] [threads]", args[0]);
             }
             let graph_path = &args[2];
             let g = match FiniteGraph::with_shape(graph_path) {
@@ -1671,67 +1742,67 @@ fn main() {
                     GraphLoadError::InvalidFormat(msg) => crash!(2, "file {} was invalid format: {}", graph_path, msg),
                 }
             };
-            finite_helper(g, &args[3], &args[4]);
+            finite_helper(g, &args[3], &args[4], &args[5]);
         }
         Some("finite-path") => {
-            if args.len() != 5 {
-                crash!(1, "usage: {} finite-path [size] [set-type] [set-size]", args[0]);
+            if args.len() != 6 {
+                crash!(1, "usage: {} finite-path [size] [set-type] [set-size] [threads]", args[0]);
             }
             let size = parse_positive(&args[2]);
-            finite_helper(FiniteGraph::path(size), &args[3], &args[4]);
+            finite_helper(FiniteGraph::path(size), &args[3], &args[4], &args[5]);
         }
         Some("finite-cycle") => {
-            if args.len() != 5 {
-                crash!(1, "usage: {} finite-cycle [size] [set-type] [set-size]", args[0]);
+            if args.len() != 6 {
+                crash!(1, "usage: {} finite-cycle [size] [set-type] [set-size] [threads]", args[0]);
             }
             let size = parse_positive(&args[2]);
-            finite_helper(FiniteGraph::cycle(size), &args[3], &args[4]);
+            finite_helper(FiniteGraph::cycle(size), &args[3], &args[4], &args[5]);
         }
         Some("finite-sq") => {
-            if args.len() != 6 {
-                crash!(1, "usage: {} finite-sq [rows] [cols] [set-type] [set-size]", args[0]);
+            if args.len() != 7 {
+                crash!(1, "usage: {} finite-sq [rows] [cols] [set-type] [set-size] [threads]", args[0]);
             }
             let rows = parse_positive(&args[2]);
             let cols = parse_positive(&args[3]);
-            finite_helper(FiniteGraph::square_grid(rows, cols), &args[4], &args[5]);
+            finite_helper(FiniteGraph::square_grid(rows, cols), &args[4], &args[5], &args[6]);
         }
         Some("finite-king") => {
-            if args.len() != 6 {
-                crash!(1, "usage: {} finite-king [rows] [cols] [set-type] [set-size]", args[0]);
+            if args.len() != 7 {
+                crash!(1, "usage: {} finite-king [rows] [cols] [set-type] [set-size] [threads]", args[0]);
             }
             let rows = parse_positive(&args[2]);
             let cols = parse_positive(&args[3]);
-            finite_helper(FiniteGraph::king_grid(rows, cols), &args[4], &args[5]);
+            finite_helper(FiniteGraph::king_grid(rows, cols), &args[4], &args[5], &args[6]);
         }
         Some("finite-cylinder") => {
-            if args.len() != 6 {
-                crash!(1, "usage: {} finite-cylinder [circum] [length] [set-type] [set-size]", args[0]);
+            if args.len() != 7 {
+                crash!(1, "usage: {} finite-cylinder [circum] [length] [set-type] [set-size] [threads]", args[0]);
             }
             let circum = parse_positive(&args[2]);
             let length = parse_positive(&args[3]);
-            finite_helper(FiniteGraph::cylinder(circum, length), &args[4], &args[5]);
+            finite_helper(FiniteGraph::cylinder(circum, length), &args[4], &args[5],  &args[6]);
         }
         Some("finite-torus") => {
-            if args.len() != 6 {
-                crash!(1, "usage: {} finite-torus [circum] [length] [set-type] [set-size]", args[0]);
+            if args.len() != 7 {
+                crash!(1, "usage: {} finite-torus [circum] [length] [set-type] [set-size] [threads]", args[0]);
             }
             let circum = parse_positive(&args[2]);
             let length = parse_positive(&args[3]);
-            finite_helper(FiniteGraph::torus(circum, length), &args[4], &args[5]);
+            finite_helper(FiniteGraph::torus(circum, length), &args[4], &args[5], &args[6]);
         }
         Some("finite-complete") => {
-            if args.len() != 5 {
-                crash!(1, "usage: {} finite-complete [size] [set-type] [set-size]", args[0]);
+            if args.len() != 6 {
+                crash!(1, "usage: {} finite-complete [size] [set-type] [set-size] [threads]", args[0]);
             }
             let size = parse_positive(&args[2]);
-            finite_helper(FiniteGraph::complete(size), &args[3], &args[4]);
+            finite_helper(FiniteGraph::complete(size), &args[3], &args[4], &args[5]);
         }
         Some("finite-hypercube") => {
-            if args.len() != 5 {
-                crash!(1, "usage: {} finite-hypercube [dim] [set-type] [set-size]", args[0]);
+            if args.len() != 6 {
+                crash!(1, "usage: {} finite-hypercube [dim] [set-type] [set-size] [threads]", args[0]);
             }
             let dim = parse_positive(&args[2]);
-            finite_helper(FiniteGraph::hypercube(dim), &args[3], &args[4]);
+            finite_helper(FiniteGraph::hypercube(dim), &args[3], &args[4], &args[5]);
         }
         Some("smallest") => {
             if args.len() != 4 {
