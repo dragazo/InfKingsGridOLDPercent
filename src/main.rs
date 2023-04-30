@@ -1341,6 +1341,7 @@ enum Parameter {
     IC, REDIC, DETIC, RSPIC, ERRIC,
     OLD, REDOLD, DETOLD, RSPOLD, ERROLD,
     OIOLD,
+    SIC,
 }
 impl FromStr for Parameter {
     type Err = ();
@@ -1365,6 +1366,7 @@ impl FromStr for Parameter {
             "rsp:old" | "rspold" => Parameter::RSPOLD,
             "err:old" | "errold" => Parameter::ERROLD,
             "oiold" | "oindold" | "oldoind" => Parameter::OIOLD,
+            "sic" => Parameter::SIC,
 
             _ => return Err(()),
         })
@@ -1423,6 +1425,7 @@ fn tess_helper_calc<T: Tessellation>(tess: &mut T, param: Parameter, graph: Grap
                 Parameter::RSPOLD => calc_thresh!(RSP, $open),
                 Parameter::ERROLD => calc_thresh!(ERR, $open),
                 Parameter::OIOLD => calc_exactly!(OIOLD, $open),
+                Parameter::SIC => calc_thresh!(SIC, $closed),
             }
         }
     }
@@ -1552,6 +1555,7 @@ fn theo_helper(param: &str, graph: &str, thresh: &str, strategy: TheoStrategy, m
                 Parameter::DETOLD => calc!(DET, $open, $open),
                 Parameter::RSPOLD => calc!(RSP, $open, $open),
                 Parameter::ERROLD => calc!(ERR, $open, $open),
+                Parameter::SIC => calc!(SIC, $closed, $closed),
             }
         }
     }
@@ -1622,6 +1626,7 @@ fn finite_helper(mut g: FiniteGraph, param: &str, count: &str, threadc: &str) {
         Parameter::RSPOLD => calc!(RSP, Open),
         Parameter::ERROLD => calc!(ERR, Open),
         Parameter::OIOLD => calc!(OIOLD, Open),
+        Parameter::SIC => calc!(SIC, Closed),
     };
     if success {
         println!("found solution:\n{:?}", g.get_solution());
@@ -1661,6 +1666,7 @@ fn smallest_helper(param: &str, goal: &str) -> usize {
             Parameter::RSPOLD => calc!(RSP, Open),
             Parameter::ERROLD => calc!(ERR, Open),
             Parameter::OIOLD => unimplemented!(),
+            Parameter::SIC => calc!(SIC, Closed),
         };
         if success {
             println!("found {} vertex solution with edges:\n{:?}", vertex_count, edges);

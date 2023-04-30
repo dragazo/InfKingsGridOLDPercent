@@ -129,6 +129,22 @@ fn test_sym_diff() {
     assert_eq!(symmetric_diff(&[], &[0i32;0]), 0);
 }
 
+pub fn min_diff<T>(a: &[T], b: &[T]) -> usize
+where T: PartialOrd
+{
+    let equal = count_equal(a, b);
+    cmp::min(a.len(), b.len()) - equal
+}
+#[test]
+fn test_min_diff() {
+    assert_eq!(min_diff(&[1, 2, 3], &[1, 2, 3]), 0);
+    assert_eq!(min_diff(&[1, 2, 3], &[1, 2, 3, 4]), 0);
+    assert_eq!(min_diff(&[1, 2, 3, 5], &[1, 2, 3, 4]), 1);
+    assert_eq!(min_diff(&[1, 2, 3, 5], &[1, 2, 3, 4, 6]), 1);
+    assert_eq!(min_diff(&[1, 2, 3, 5], &[1, 2, 3, 4, 6, 7]), 1);
+    assert_eq!(min_diff(&[1, 2, 3, 5, 10], &[1, 2, 3, 4, 6, 7]), 2);
+}
+
 pub fn max_diff<T>(a: &[T], b: &[T]) -> usize
 where T: PartialOrd
 {

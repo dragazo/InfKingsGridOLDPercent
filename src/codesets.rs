@@ -589,6 +589,37 @@ where T: Ord + Default + Clone + Debug
     }
 }
 
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct SIC<T> {
+    codes: Vec<Vec<T>>,
+}
+impl<T> Set for SIC<T>
+where T: Ord + Default + Clone + Debug
+{
+    type Item = T;
+    type LocatingCode = RegularLOC<T>;
+
+    fn clear(&mut self) {
+        self.codes.clear();
+    }
+    fn can_add(&self, loc: &Self::LocatingCode) -> bool {
+        if loc.code.len() < 1 { return false; }
+        for other in &self.codes {
+            if util::min_diff(other, &loc.code) < 1 {
+                return false;
+            }
+        }
+        true
+    }
+    fn add(&mut self, loc: Self::LocatingCode) -> bool {
+        if self.can_add(&loc) {
+            self.codes.push(loc.code);
+            true
+        }
+        else { false }
+    }
+}
+
 #[test]
 fn test_det_set() {
     type C = <DET<(isize, isize)> as Set>::LocatingCode;
