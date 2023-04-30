@@ -7,7 +7,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-more-asserts = "0.2.1"
-itertools = "0.9.0"
-num = "0.3.0"
-num_cpus = "1.13.0"
+more-asserts = "0.3.1"
+itertools = "0.10.5"
+num = "0.4.0"
+num_cpus = "1.15.0"
+human-sort = "0.2.2"

@@ -2,7 +2,6 @@ use std::collections::{BTreeSet, BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::io::{self, BufRead, BufReader};
 use std::fs::File;
-use std::path::Path;
 use std::mem;
 use std::convert::TryFrom;
 use std::str::FromStr;
@@ -1108,7 +1107,6 @@ where Codes: codesets::Set<Item = usize> + Send + 'static
 
 #[derive(Debug)]
 enum GraphLoadError {
-    FileOpenFailure,
     InvalidFormat(&'static str),
 }
 #[derive(Clone)]
@@ -1122,12 +1120,7 @@ struct FiniteGraph {
     detectors: HashSet<usize>,
 }
 impl FiniteGraph {
-    fn with_shape<P: AsRef<Path>>(path: P) -> Result<Self, GraphLoadError> {
-        let mut f = BufReader::new(match File::open(path) {
-            Ok(x) => x,
-            Err(_) => return Err(GraphLoadError::FileOpenFailure),
-        });
-
+    fn with_shape(f: &mut dyn BufRead) -> Result<Self, GraphLoadError> {
         struct Vertexish {
             label: String,
             adj: BTreeSet<usize>,
@@ -1204,7 +1197,7 @@ impl FiniteGraph {
     }
     fn get_solution(&self) -> Vec<&str> {
         let mut v: Vec<&str> = self.detectors.iter().map(|&p| self.verts[p].label.as_str()).collect();
-        v.sort();
+        human_sort::sort(&mut v);
         v
     }
 
@@ -1449,7 +1442,7 @@ fn tess_helper<T: Tessellation>(mut tess: T, param: &str, graph: &str, goal: &st
     
     match tess_helper_calc(&mut tess, param, graph, goal) {
         Some(min) => tess_helper_print(&tess, min),
-        None => println!("no solution found"),
+        None => eprintln!("no solution found"),
     }
 }
 fn entropy_helper(big_geo: Geometry, entropy_size: &str, param: &str, graph: &str, goal: &str, threadc: &str) {
@@ -1632,7 +1625,7 @@ fn finite_helper(mut g: FiniteGraph, param: &str, count: &str, threadc: &str) {
         println!("found solution:\n{:?}", g.get_solution());
     }
     else {
-        println!("no solution found");
+        eprintln!("no solution found");
     }
 }
 fn smallest_helper(param: &str, goal: &str) -> usize {
@@ -1741,11 +1734,24 @@ fn main() {
                 crash!(1, "usage: {} finite [graph-file] [set-type] [set-size] [threads]", args[0]);
             }
             let graph_path = &args[2];
-            let g = match FiniteGraph::with_shape(graph_path) {
-                Ok(g) => g,
-                Err(e) => match e {
-                    GraphLoadError::FileOpenFailure => crash!(2, "failed to open graph file {}", graph_path),
-                    GraphLoadError::InvalidFormat(msg) => crash!(2, "file {} was invalid format: {}", graph_path, msg),
+            let g = match args[2].as_str() {
+                "-" => match FiniteGraph::with_shape(&mut std::io::stdin().lock()) {
+                    Ok(g) => g,
+                    Err(e) => match e {
+                        GraphLoadError::InvalidFormat(msg) => crash!(2, "file {} was invalid format: {}", graph_path, msg),
+                    }
+                }
+                path => {
+                    let mut f = match File::open(path) {
+                        Ok(f) => Box::new(BufReader::new(f)),
+                        Err(e) => crash!(2, "failed to open graph file {}:\n\t{}", graph_path, e),
+                    };
+                    match FiniteGraph::with_shape(&mut f) {
+                        Ok(g) => g,
+                        Err(e) => match e {
+                            GraphLoadError::InvalidFormat(msg) => crash!(2, "file {} was invalid format: {}", graph_path, msg),
+                        }
+                    }
                 }
             };
             finite_helper(g, &args[3], &args[4], &args[5]);
@@ -1943,7 +1949,7 @@ fn main() {
     assert_sorted(&FiniteGraph::path(9));
     assert_sorted(&FiniteGraph::square_grid(3, 4));
     assert_sorted(&FiniteGraph::torus(4, 6));
-    assert_sorted(&FiniteGraph::with_shape("example-graphs/petersen.txt").unwrap());
+    assert_sorted(&FiniteGraph::with_shape(&mut BufReader::new(File::open("example-graphs/petersen.txt").unwrap())).unwrap());
 }
 
 #[test] fn test_theo_hex_works() {
