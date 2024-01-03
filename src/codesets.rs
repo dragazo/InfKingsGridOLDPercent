@@ -539,10 +539,10 @@ where T: Ord + Default + Clone + Debug
         self.codes.clear();
     }
     fn can_add(&self, loc: &Self::LocatingCode) -> bool {
-        if loc.code.len() < 3 { return false; }
+        if loc.code.len() < 2 { return false; }
         for other in &self.codes {
             let equal = util::count_equal(other, &loc.code);
-            if other.len() + loc.code.len() - 2 * equal < 2 {
+            if other.len() + loc.code.len() - 2 * equal < 3 {
                 return false;
             }
         }
